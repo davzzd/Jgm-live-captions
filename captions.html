@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Subtitles for Resolume</title>
+  <style>
+    /**
+     * RESOLUME ARENA SUBTITLE DISPLAY
+     * 
+     * This page is designed to be used as a Browser Source in Resolume Arena.
+     * Resolume will capture this page and output it as NDI RGBA (with alpha channel).
+     * 
+     * CRITICAL: Background must be truly transparent (not black/white)
+     * - No background-color on body or html
+     * - Use rgba(0,0,0,0) or transparent
+     * - Resolume needs true alpha for compositing
+     */
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent; /* CRITICAL: True transparency for Resolume/NDI */
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    /**
+     * Subtitle Container
+     * - Centered both horizontally and vertically on screen
+     * - Positioned in center so it can be dragged in Resolume
+     * - Max width 80% to prevent edge overflow
+     * - No background (transparent)
+     */
+    #subtitle-container {
+      position: absolute;
+      left: 50%;
+      top: 50%; /* Center vertically */
+      transform: translate(-50%, -50%); /* Perfect centering (both X and Y) */
+      width: 80vw; /* Default width, will be overridden by settings */
+      max-width: 80vw; /* Default max-width, will be overridden by settings */
+      text-align: center;
+      padding: 0 2vw;
+      
+      /* Prevent layout shift on text updates */
+      min-height: 0;
+      
+      /* Smooth fade transitions */
+      opacity: 0;
+      transition: opacity 0.3s ease-in-out, width 0.3s ease, max-width 0.3s ease;
+      
+      /* Ensure proper centering for content */
+      display: block;
+      box-sizing: border-box;
+    }
+
+    #subtitle-container.visible {
+      opacity: 1;
+    }
+
+    /**
+     * Subtitle Text
+     * - White text for broadcast readability
+     * - Text shadow for contrast against any background
+     * - Responsive font size (scales with viewport)
+     * - Max 2 lines with natural wrapping
+     * - Line height optimized for readability
+     */
+    #subtitle-text {
+      color: #ffffff;
+      font-size: clamp(24px, 4vw, 48px); /* Responsive: 24px min, 48px max, scales with viewport */
+      font-weight: 600; /* Semi-bold for readability */
+      text-shadow: 
+        2px 2px 4px rgba(0, 0, 0, 0.8),
+        0 0 8px rgba(0, 0, 0, 0.5); /* Double shadow for better contrast */
+      
+      /* Multiple lines - allow natural wrapping and line breaks */
+      white-space: pre-line; /* Preserve line breaks from \n */
+      line-height: 1.6; /* Comfortable line spacing for readability */
+      max-height: 50vh; /* Default, will be overridden by settings */
+      overflow: visible; /* Changed to visible to prevent cutting off last line */
+      
+      /* Perfect horizontal centering */
+      text-align: center;
+      margin: 0 auto;
+      display: block;
+      width: 100%; /* Use full width of container */
+      max-width: 100%; /* Don't exceed container width */
+      box-sizing: border-box;
+      
+      /* Prevent text selection (cleaner for broadcast) */
+      user-select: none;
+      -webkit-user-select: none;
+      
+      /* Smooth text updates */
+      word-wrap: break-word;
+      word-break: break-word;
+      hyphens: auto;
+    }
+
+    /**
+     * Empty State (when no captions)
+     * - Completely invisible
+     * - No placeholder text (Resolume should show nothing)
+     */
+    #subtitle-container.empty {
+      opacity: 0;
+    }
+
+    /**
+     * Connection Status (hidden by default, only for debugging)
+     * - Top-left corner
+     * - Small, unobtrusive
+     * - Can be enabled for testing
+     */
+    #status {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: rgba(255, 255, 255, 0.3);
+      font-size: 12px;
+      display: none; /* Hidden by default - enable for debugging */
+    }
+  </style>
+</head>
+<body>
+  <!-- Status indicator (hidden, for debugging only) -->
+  <div id="status">Connecting...</div>
+
+  <!-- Subtitle Container -->
+  <div id="subtitle-container" class="empty">
+    <div id="subtitle-text"></div>
+  </div>
+
+  <script>
+    /**
+     * RESOLUME SUBTITLE DISPLAY SCRIPT
+     * 
+     * This script:
+     * 1. Connects to local WebSocket server (ws://localhost:8080/captions)
+     * 2. Receives translated caption text (plain strings)
+     * 3. Displays only FINAL captions (ignores partials)
+     * 4. Updates text with smooth fade transitions
+     * 5. Handles connection errors gracefully
+     */
+
+    const subtitleContainer = document.getElementById('subtitle-container');
+    const subtitleText = document.getElementById('subtitle-text');
+    const statusEl = document.getElementById('status');
+
+    let ws = null;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = Infinity; // Allow infinite reconnects for long sessions
+    let reconnectDelay = 1000; // Start with 1s, will use exponential backoff
+    const maxReconnectDelay = 30000; // Max 30s delay
+    let reconnectTimeout = null;
+    let connectionStartTime = 0;
+    
+    // Subtitle accumulation
+    let accumulatedText = ''; // Store all accumulated text as one continuous string
+    let lastUpdateTime = 0;
+    let clearTimeoutId = null;
+    
+    // Settings (with defaults)
+    let settings = {
+      maxLines: 5,
+      wordsPerLine: 15,
+      linePersistence: 5,
+      maxWidth: 80,
+      horizontalAlign: 'center',
+      verticalAlign: 'center',
+      horizontalOffset: 0,
+      verticalOffset: 0,
+      fontSizeMin: 24,
+      fontSizeMax: 48,
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+      lineHeight: 1.6,
+      textColor: '#ffffff',
+      textShadow: 8,
+      fadeInDuration: 300,
+      fadeOutDuration: 300,
+      pauseThreshold: 5000,
+      autoClear: true
+    };
+
+    /**
+     * Update subtitle text (accumulates multiple lines)
+     * @param {string} text - The caption text to display
+     */
+    function updateSubtitle(text) {
+      if (!text || text.trim() === '') {
+        // Empty text - start clearing timer
+        startClearTimer();
+        return;
+      }
+
+      const now = Date.now();
+      const timeSinceLastUpdate = now - lastUpdateTime;
+      lastUpdateTime = now;
+
+      // If there's a significant pause (paragraph break), clear accumulated text
+      if (timeSinceLastUpdate > settings.pauseThreshold && accumulatedText.length > 0) {
+        console.log('📝 Paragraph break detected, clearing accumulated text');
+        accumulatedText = '';
+      }
+
+      // Accumulate text into a continuous paragraph (not split by sentences)
+      const trimmedText = text.trim();
+      if (trimmedText) {
+        // Check if this is an update to existing text (partial -> final)
+        if (accumulatedText && trimmedText.startsWith(accumulatedText)) {
+          // This is a partial update - replace the accumulated text
+          accumulatedText = trimmedText;
+        } else if (trimmedText !== accumulatedText) {
+          // This is new text - append to accumulated text with a space
+          if (accumulatedText && !accumulatedText.endsWith(' ')) {
+            accumulatedText += ' ' + trimmedText;
+          } else {
+            accumulatedText = (accumulatedText || '') + trimmedText;
+          }
+        }
+      }
+
+      // Apply strict word wrapping to the entire accumulated text
+      let displayText = '';
+      if (accumulatedText.length > 0) {
+        const words = accumulatedText.split(/\s+/).filter(w => w.length > 0); // Split by whitespace and filter empty
+        
+        if (settings.wordsPerLine > 0 && words.length > 0) {
+          // Strict word wrapping: exactly wordsPerLine words per line
+          const wrappedLines = [];
+          let currentLine = [];
+          
+          words.forEach((word) => {
+            currentLine.push(word);
+            
+            // When we reach the word limit, create a new line
+            if (currentLine.length >= settings.wordsPerLine) {
+              wrappedLines.push(currentLine.join(' '));
+              currentLine = [];
+            }
+          });
+          
+          // Add remaining words as the last line
+          if (currentLine.length > 0) {
+            wrappedLines.push(currentLine.join(' '));
+          }
+          
+          // Limit to max lines (keep only the most recent lines)
+          if (wrappedLines.length > settings.maxLines) {
+            wrappedLines.splice(0, wrappedLines.length - settings.maxLines);
+          }
+          
+          displayText = wrappedLines.join('\n');
+        } else {
+          // No word wrapping - use text as is
+          displayText = accumulatedText;
+        }
+      }
+      
+      subtitleText.textContent = displayText;
+
+      // Show subtitle with fade-in
+      subtitleContainer.classList.remove('empty');
+      subtitleContainer.classList.add('visible');
+
+      // Reset clear timer (new text arrived, don't clear yet)
+      resetClearTimer();
+
+      // Log update (for debugging)
+      const wordCount = accumulatedText.split(/\s+/).filter(w => w.length > 0).length;
+      const lineCount = displayText.split('\n').length;
+      if (Math.random() < 0.1) { // Log 10% of updates to reduce console spam
+        console.log('📝 Subtitle updated:', wordCount, 'words,', lineCount, 'lines');
+      }
+    }
+
+    /**
+     * Start timer to clear subtitles after pause
+     */
+    function startClearTimer() {
+      if (clearTimeoutId) {
+        clearTimeout(clearTimeoutId);
+      }
+      
+      clearTimeoutId = setTimeout(() => {
+        if (settings.autoClear) {
+          console.log('📝 Clearing subtitles after pause');
+          accumulatedText = '';
+          subtitleText.textContent = '';
+          subtitleContainer.classList.remove('visible');
+          subtitleContainer.classList.add('empty');
+        }
+        clearTimeoutId = null;
+      }, settings.pauseThreshold);
+    }
+
+    /**
+     * Reset clear timer (new text arrived)
+     */
+    function resetClearTimer() {
+      if (clearTimeoutId) {
+        clearTimeout(clearTimeoutId);
+        clearTimeoutId = null;
+      }
+    }
+
+    /**
+     * Apply settings to the display
+     * @param {Object} newSettings - Settings object
+     */
+    function applySettings(newSettings) {
+      // Merge with existing settings
+      settings = { ...settings, ...newSettings };
+      
+      // Apply CSS styles
+      const container = subtitleContainer;
+      const text = subtitleText;
+      
+      // Positioning
+      let left = '50%';
+      let top = '50%';
+      let transform = 'translate(-50%, -50%)';
+      
+      if (settings.horizontalAlign === 'left') {
+        left = '0%';
+        transform = `translate(${settings.horizontalOffset}%, -50%)`;
+      } else if (settings.horizontalAlign === 'right') {
+        left = '100%';
+        transform = `translate(calc(-100% + ${settings.horizontalOffset}%), -50%)`;
+      } else {
+        // center
+        left = '50%';
+        transform = `translate(calc(-50% + ${settings.horizontalOffset}%), -50%)`;
+      }
+      
+      if (settings.verticalAlign === 'top') {
+        top = '0%';
+        transform = transform.replace('-50%', `${settings.verticalOffset}%`);
+      } else if (settings.verticalAlign === 'bottom') {
+        top = '100%';
+        transform = transform.replace('-50%', `calc(-100% + ${settings.verticalOffset}%)`);
+      } else {
+        // center
+        top = '50%';
+        const yOffset = settings.verticalOffset;
+        transform = transform.replace('-50%', `calc(-50% + ${yOffset}%)`);
+      }
+      
+      container.style.left = left;
+      container.style.top = top;
+      container.style.transform = transform;
+      
+      // Set both width and maxWidth to allow proper expansion
+      // Use calc to account for padding (2vw on each side = 4vw total)
+      const widthValue = `${settings.maxWidth}vw`;
+      container.style.width = widthValue;
+      container.style.maxWidth = widthValue;
+      container.style.minWidth = '0'; // Allow shrinking if needed
+      
+      // Ensure the text element can use the full width
+      text.style.width = '100%';
+      text.style.maxWidth = '100%';
+      
+      // Calculate height based on number of lines, line height, and font size
+      // Formula: maxLines * lineHeight * fontSize (in viewport units)
+      // We use a viewport-based calculation for responsiveness
+      const maxLines = settings.maxLines || 5;
+      const lineHeightValue = settings.lineHeight;
+      const fontSizeMax = settings.fontSizeMax;
+      const fontSizeMin = settings.fontSizeMin;
+      
+      // Calculate height more accurately using viewport height
+      // Get actual viewport height for accurate calculation
+      const viewportHeight = window.innerHeight || 1080;
+      
+      // Calculate height in pixels: each line = fontSize * lineHeight
+      const lineHeightPx = fontSizeMax * lineHeightValue;
+      const totalHeightPx = maxLines * lineHeightPx;
+      const heightVh = (totalHeightPx / viewportHeight) * 100; // Convert to vh
+      
+      // Add generous padding to ensure last line is never cut off
+      // Account for line spacing, text shadows, and rendering differences
+      // Add one extra line worth of space to be safe
+      const extraLineHeight = lineHeightPx / viewportHeight * 100;
+      const maxHeightVh = Math.min(heightVh * 1.25 + extraLineHeight, 90); // 25% padding + one line, max 90vh
+      
+      // Also set a minimum height based on min font size for small screens
+      const minLineHeightPx = fontSizeMin * lineHeightValue;
+      const minTotalHeightPx = maxLines * minLineHeightPx;
+      const minHeightVh = (minTotalHeightPx / viewportHeight) * 100;
+      
+      // Set container height to accommodate all lines with extra padding
+      // Container should be slightly larger than text to prevent any cutoff
+      const containerMaxHeight = Math.min(heightVh * 1.3 + extraLineHeight, 95); // 30% padding + one line, max 95vh
+      container.style.maxHeight = `${containerMaxHeight}vh`;
+      container.style.minHeight = '0';
+      container.style.overflow = 'visible'; // Allow content to be fully visible
+      container.style.paddingBottom = '0.5vh'; // Add small bottom padding to ensure last line is visible
+      
+      // Text styling
+      text.style.fontSize = `clamp(${fontSizeMin}px, 4vw, ${fontSizeMax}px)`;
+      text.style.fontFamily = settings.fontFamily;
+      text.style.lineHeight = lineHeightValue;
+      text.style.color = settings.textColor;
+      
+      // Set text element height to match calculated values with extra padding
+      text.style.maxHeight = `${maxHeightVh}vh`;
+      text.style.minHeight = `${minHeightVh}vh`;
+      
+      // Change overflow to visible or auto to prevent cutting off last line
+      // Use 'visible' to ensure all content is shown, or 'auto' if we need scrolling
+      text.style.overflow = 'visible';
+      text.style.overflowY = 'visible'; // Specifically allow vertical overflow
+      
+      // Text shadow (intensity 0-10)
+      const shadowIntensity = settings.textShadow;
+      if (shadowIntensity === 0) {
+        text.style.textShadow = 'none';
+      } else {
+        const blur = shadowIntensity * 0.5;
+        const spread = shadowIntensity * 0.25;
+        text.style.textShadow = `
+          ${spread}px ${spread}px ${blur}px rgba(0, 0, 0, ${0.4 + shadowIntensity * 0.06}),
+          0 0 ${blur * 2}px rgba(0, 0, 0, ${0.2 + shadowIntensity * 0.03})
+        `;
+      }
+      
+      // Animation
+      container.style.transition = `opacity ${settings.fadeInDuration}ms ease-in-out`;
+      
+      console.log('✅ Settings applied to display');
+    }
+
+    /**
+     * Update connection status
+     * @param {string} message - Status message
+     */
+    function updateStatus(message) {
+      if (statusEl) {
+        statusEl.textContent = message;
+      }
+      console.log('🔌 Status:', message);
+    }
+
+    /**
+     * Connect to WebSocket server
+     */
+    function connect() {
+      const wsUrl = 'ws://localhost:8080/captions';
+      updateStatus('Connecting to ' + wsUrl + '...');
+
+      try {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log('✅ WebSocket connected');
+          updateStatus('Connected');
+          reconnectAttempts = 0; // Reset on successful connection
+          reconnectDelay = 1000; // Reset delay
+          connectionStartTime = Date.now();
+          if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+          }
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            // Check if message is JSON (settings) or plain text (caption)
+            let data;
+            try {
+              data = JSON.parse(event.data);
+              if (data.type === 'settings') {
+                // Apply settings
+                applySettings(data.settings);
+                console.log('✅ Settings applied:', data.settings);
+                return;
+              }
+            } catch (e) {
+              // Not JSON, treat as plain text caption
+              const text = event.data;
+              console.log('📥 Received caption text:', text);
+              
+              // updateSubtitle handles empty text and accumulation
+              updateSubtitle(text);
+              return;
+            }
+          } catch (error) {
+            console.error('❌ Error processing message:', error);
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error('❌ WebSocket error:', error);
+          updateStatus('Connection error');
+        };
+
+        ws.onclose = (event) => {
+          console.log('🔌 WebSocket closed:', event.code, event.reason);
+          updateStatus('Disconnected');
+
+          // Attempt to reconnect with exponential backoff
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++;
+            reconnectDelay = Math.min(reconnectDelay * 1.5, maxReconnectDelay); // Exponential backoff, max 30s
+            const uptime = connectionStartTime ? ((Date.now() - connectionStartTime) / 1000 / 60).toFixed(1) : 0;
+            console.log(`🔄 Reconnecting in ${(reconnectDelay/1000).toFixed(1)}s (attempt ${reconnectAttempts}, uptime: ${uptime} min)...`);
+            updateStatus(`Reconnecting in ${(reconnectDelay/1000).toFixed(1)}s...`);
+            
+            reconnectTimeout = setTimeout(() => {
+              reconnectTimeout = null;
+              connect();
+            }, reconnectDelay);
+          } else {
+            console.error('❌ Max reconnection attempts reached');
+            updateStatus('Connection failed');
+            // Don't clear subtitle, keep last shown text
+          }
+        };
+
+      } catch (error) {
+        console.error('❌ Failed to create WebSocket:', error);
+        updateStatus('Connection failed');
+        
+        // Retry after delay
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          setTimeout(() => {
+            connect();
+          }, reconnectDelay);
+        }
+      }
+    }
+
+    /**
+     * Handle page visibility changes
+     * - Reconnect when page becomes visible (Resolume might pause/resume)
+     */
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && (!ws || ws.readyState !== WebSocket.OPEN)) {
+        console.log('🔄 Page visible, reconnecting...');
+        connect();
+      }
+    });
+
+    /**
+     * Initialize connection on page load
+     */
+    window.addEventListener('load', () => {
+      console.log('🚀 Subtitle display initialized');
+      
+      // Apply default settings on load
+      applySettings(settings);
+      
+      connect();
+    });
+
+    /**
+     * Cleanup on page unload
+     */
+    window.addEventListener('beforeunload', () => {
+      if (ws) {
+        ws.close();
+      }
+    });
+  </script>
+</body>
+</html>
+

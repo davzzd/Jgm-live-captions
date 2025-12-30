@@ -1,0 +1,1471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Translation - Microphone Input</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #040D12 0%, #183D3D 100%);
+      min-height: 100vh;
+      padding: 20px;
+      color: #93B1A6;
+      margin: 0;
+    }
+
+    /* Main Layout Wrapper */
+    .app-wrapper {
+      display: flex;
+      gap: 20px;
+      max-width: 1600px;
+      margin: 0 auto;
+      height: calc(100vh - 40px);
+    }
+
+    /* Main Content Container */
+    .container {
+      background: rgba(24, 61, 61, 0.8);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 40px;
+      flex: 1;
+      min-width: 0;
+      box-shadow: 0 8px 32px rgba(4, 13, 18, 0.5);
+      border: 1px solid rgba(92, 131, 116, 0.3);
+      overflow-y: auto;
+    }
+
+    /* Settings Sidebar */
+    .settings-sidebar {
+      width: 400px;
+      min-width: 400px;
+      background: rgba(24, 61, 61, 0.8);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      box-shadow: 0 8px 32px rgba(4, 13, 18, 0.5);
+      border: 1px solid rgba(92, 131, 116, 0.3);
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .settings-sidebar.collapsed {
+      transform: translateX(calc(100% - 60px));
+      opacity: 0.8;
+    }
+
+    /* Settings Toggle Button */
+    .settings-toggle-btn {
+      position: absolute;
+      left: -60px;
+      top: 20px;
+      width: 50px;
+      height: 50px;
+      background: rgba(24, 61, 61, 0.95);
+      border: 1px solid rgba(92, 131, 116, 0.3);
+      border-right: none;
+      border-radius: 12px 0 0 12px;
+      color: #93B1A6;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+      z-index: 10;
+      box-shadow: -4px 0 12px rgba(4, 13, 18, 0.3);
+    }
+
+    .settings-toggle-btn:hover {
+      background: rgba(92, 131, 116, 0.5);
+      border-color: #93B1A6;
+      color: #040D12;
+    }
+
+    .settings-toggle-btn-icon {
+      transition: transform 0.3s ease;
+    }
+
+    .settings-sidebar.collapsed .settings-toggle-btn-icon {
+      transform: rotate(180deg);
+    }
+
+    h1 {
+      font-size: 32px;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    .subtitle {
+      text-align: center;
+      opacity: 0.9;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+
+    .status-card {
+      background: rgba(24, 61, 61, 0.6);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(92, 131, 116, 0.3);
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #5C8374;
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.connected {
+      background: #93B1A6;
+    }
+
+    .status-dot.recording {
+      background: #5C8374;
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .status-text {
+      font-weight: 600;
+      font-size: 16px;
+    }
+
+    .device-selector {
+      margin-bottom: 20px;
+    }
+
+    .device-selector label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      font-size: 14px;
+    }
+
+    .device-selector select {
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(92, 131, 116, 0.4);
+      background: rgba(4, 13, 18, 0.6);
+      color: #93B1A6;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .device-selector select option {
+      background: #183D3D;
+      color: #93B1A6;
+    }
+
+    .audio-visualization {
+      background: rgba(4, 13, 18, 0.6);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      min-height: 150px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(92, 131, 116, 0.2);
+    }
+
+    .waveform {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      width: 100%;
+      height: 100px;
+    }
+
+    .wave-bar {
+      width: 4px;
+      background: linear-gradient(to top, #5C8374, #93B1A6);
+      border-radius: 2px;
+      transition: height 0.1s ease-out;
+      min-height: 2px;
+    }
+
+    .audio-level {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .level-meter {
+      flex: 1;
+      height: 8px;
+      background: rgba(4, 13, 18, 0.6);
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid rgba(92, 131, 116, 0.3);
+    }
+
+    .level-fill {
+      height: 100%;
+      background: linear-gradient(to right, #5C8374, #93B1A6, #5C8374);
+      width: 0%;
+      transition: width 0.1s ease-out;
+    }
+
+    .level-text {
+      font-size: 12px;
+      min-width: 50px;
+      text-align: right;
+    }
+
+    .controls {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+
+    button {
+      flex: 1;
+      padding: 16px 24px;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-start {
+      background: #5C8374;
+      color: #040D12;
+      font-weight: 700;
+    }
+
+    .btn-start:hover:not(:disabled) {
+      background: #93B1A6;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(92, 131, 116, 0.5);
+      color: #040D12;
+    }
+
+    .btn-stop {
+      background: #183D3D;
+      color: #93B1A6;
+      border: 1px solid #5C8374;
+      font-weight: 700;
+    }
+
+    .btn-stop:hover:not(:disabled) {
+      background: #5C8374;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(24, 61, 61, 0.5);
+      color: #040D12;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+      margin-top: 20px;
+    }
+
+    .info-item {
+      background: rgba(4, 13, 18, 0.6);
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(92, 131, 116, 0.2);
+    }
+
+    .info-label {
+      font-size: 12px;
+      opacity: 0.7;
+      margin-bottom: 4px;
+    }
+
+    .info-value {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .refresh-btn {
+      background: rgba(24, 61, 61, 0.6);
+      color: #93B1A6;
+      padding: 8px 16px;
+      border: 1px solid rgba(92, 131, 116, 0.4);
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .refresh-btn:hover {
+      background: rgba(92, 131, 116, 0.4);
+      border-color: #93B1A6;
+    }
+
+    /* Settings Panel Styles (now inside sidebar) */
+    .settings-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .settings-header {
+      padding: 20px;
+      border-bottom: 1px solid rgba(92, 131, 116, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+      flex-shrink: 0;
+    }
+
+    .settings-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #93B1A6;
+    }
+
+    .settings-content {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 20px;
+    }
+    
+    .settings-sidebar.collapsed .settings-content {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Custom Scrollbar for Settings */
+    .settings-content::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .settings-content::-webkit-scrollbar-track {
+      background: rgba(4, 13, 18, 0.3);
+      border-radius: 4px;
+    }
+
+    .settings-content::-webkit-scrollbar-thumb {
+      background: rgba(92, 131, 116, 0.5);
+      border-radius: 4px;
+    }
+
+    .settings-content::-webkit-scrollbar-thumb:hover {
+      background: rgba(92, 131, 116, 0.7);
+    }
+
+    .settings-section {
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .settings-section:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .settings-section-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      opacity: 0.9;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+    }
+
+    .setting-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .setting-item.full-width {
+      grid-column: 1 / -1;
+    }
+
+    .setting-label {
+      font-size: 12px;
+      opacity: 0.8;
+      font-weight: 500;
+    }
+
+    .setting-input {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(92, 131, 116, 0.4);
+      background: rgba(4, 13, 18, 0.6);
+      color: #93B1A6;
+      font-size: 14px;
+      width: 100%;
+      transition: all 0.2s ease;
+    }
+
+    .setting-input:focus {
+      outline: none;
+      border-color: #93B1A6;
+      background: rgba(24, 61, 61, 0.8);
+    }
+
+    .setting-input[type="range"] {
+      padding: 0;
+      height: 6px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(4, 13, 18, 0.6);
+      border-radius: 3px;
+    }
+
+    .setting-input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #5C8374;
+      cursor: pointer;
+      border: 2px solid rgba(147, 177, 166, 0.5);
+    }
+
+    .setting-input[type="range"]::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #5C8374;
+      cursor: pointer;
+      border: 2px solid rgba(147, 177, 166, 0.5);
+    }
+
+    .setting-value {
+      font-size: 12px;
+      opacity: 0.7;
+      margin-top: -4px;
+    }
+
+    .setting-select {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(92, 131, 116, 0.4);
+      background: rgba(4, 13, 18, 0.6);
+      color: #93B1A6;
+      font-size: 14px;
+      width: 100%;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .setting-select:focus {
+      outline: none;
+      border-color: #93B1A6;
+      background: rgba(24, 61, 61, 0.8);
+    }
+
+    .setting-select option {
+      background: #183D3D;
+      color: #93B1A6;
+    }
+
+    .color-input-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .color-picker {
+      width: 50px;
+      height: 40px;
+      border-radius: 8px;
+      border: 1px solid rgba(92, 131, 116, 0.4);
+      cursor: pointer;
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(4, 13, 18, 0.6);
+    }
+
+    .color-picker::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+
+    .color-picker::-webkit-color-swatch {
+      border: none;
+      border-radius: 6px;
+    }
+
+    .color-picker::-moz-color-swatch {
+      border: none;
+      border-radius: 6px;
+    }
+
+    .reset-btn {
+      background: rgba(24, 61, 61, 0.6);
+      color: #93B1A6;
+      border: 1px solid rgba(92, 131, 116, 0.4);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-top: 15px;
+    }
+
+    .reset-btn:hover {
+      background: rgba(92, 131, 116, 0.4);
+      border-color: #93B1A6;
+    }
+
+    /* Responsive Design */
+    @media (max-width: 1200px) {
+      .app-wrapper {
+        flex-direction: column;
+        height: auto;
+        min-height: calc(100vh - 40px);
+      }
+
+      .container {
+        flex: none;
+      }
+
+      .settings-sidebar {
+        width: 100%;
+        min-width: 100%;
+        max-height: 60vh;
+      }
+
+      .settings-sidebar.collapsed {
+        transform: translateY(calc(100% - 60px));
+        max-height: 60px;
+      }
+
+      .settings-toggle-btn {
+        left: 20px;
+        top: -60px;
+        border-radius: 12px 12px 0 0;
+        border-right: 1px solid rgba(92, 131, 116, 0.3);
+        border-bottom: none;
+        box-shadow: 0 -4px 12px rgba(4, 13, 18, 0.3);
+      }
+
+      .settings-sidebar.collapsed .settings-toggle-btn {
+        top: 0;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .app-wrapper {
+        padding: 10px;
+        gap: 10px;
+      }
+
+      .container {
+        padding: 20px;
+      }
+
+      .settings-sidebar {
+        border-radius: 12px;
+      }
+
+      .settings-content {
+        padding: 15px;
+      }
+
+      .settings-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-wrapper">
+    <!-- Main Content -->
+    <div class="container">
+      <h1>JGM Live Translation</h1>
+      <p class="subtitle">Malayalam → English Real-time Translation</p>
+
+      <div class="status-card">
+        <div class="status-indicator">
+          <div id="statusDot" class="status-dot"></div>
+          <span id="statusText" class="status-text">Connecting...</span>
+        </div>
+
+        <div class="device-selector">
+          <label for="audioInput">Microphone Input</label>
+          <select id="audioInput">
+            <option value="">Loading devices...</option>
+          </select>
+          <button class="refresh-btn" id="refreshDevices">Refresh</button>
+        </div>
+      </div>
+
+      <div class="audio-visualization">
+        <div id="waveform" class="waveform">
+          <!-- Waveform bars will be generated here -->
+        </div>
+      </div>
+
+      <div class="audio-level">
+        <div class="level-meter">
+          <div id="levelFill" class="level-fill"></div>
+        </div>
+        <span id="levelText" class="level-text">0 dB</span>
+      </div>
+
+      <div class="controls">
+        <button id="startBtn" class="btn-start">Start Recording</button>
+        <button id="stopBtn" class="btn-stop" disabled>Stop Recording</button>
+      </div>
+
+      <div class="info-grid">
+        <div class="info-item">
+          <div class="info-label">Sample Rate</div>
+          <div id="sampleRate" class="info-value">-</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Channels</div>
+          <div id="channels" class="info-value">-</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Format</div>
+          <div id="format" class="info-value">-</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Status</div>
+          <div id="connectionStatus" class="info-value">Disconnected</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Sidebar -->
+    <div class="settings-sidebar" id="settingsSidebar">
+      <button class="settings-toggle-btn" id="settingsToggleBtn">
+        <span class="settings-toggle-btn-icon">◀</span>
+      </button>
+      
+      <div class="settings-panel">
+        <div class="settings-header">
+          <div class="settings-title">Caption Display Settings</div>
+        </div>
+        <div class="settings-content" id="settingsContent">
+        <!-- Layout Settings -->
+        <div class="settings-section">
+          <div class="settings-section-title">Layout</div>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label class="setting-label">Max Lines</label>
+              <input type="range" id="maxLines" class="setting-input" min="1" max="10" value="5" step="1">
+              <span class="setting-value" id="maxLinesValue">5 lines</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Words Per Line (Approx)</label>
+              <input type="range" id="wordsPerLine" class="setting-input" min="5" max="30" value="15" step="1">
+              <span class="setting-value" id="wordsPerLineValue">15 words</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Line Persistence (Lines to Keep)</label>
+              <input type="range" id="linePersistence" class="setting-input" min="1" max="10" value="5" step="1">
+              <span class="setting-value" id="linePersistenceValue">5 lines</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Max Width (%)</label>
+              <input type="range" id="maxWidth" class="setting-input" min="30" max="100" value="80" step="5">
+              <span class="setting-value" id="maxWidthValue">80%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Positioning Settings -->
+        <div class="settings-section">
+          <div class="settings-section-title">Positioning</div>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label class="setting-label">Horizontal Alignment</label>
+              <select id="horizontalAlign" class="setting-select">
+                <option value="left">Left</option>
+                <option value="center" selected>Center</option>
+                <option value="right">Right</option>
+              </select>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Vertical Alignment</label>
+              <select id="verticalAlign" class="setting-select">
+                <option value="top">Top</option>
+                <option value="center" selected>Center</option>
+                <option value="bottom">Bottom</option>
+              </select>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Horizontal Offset (%)</label>
+              <input type="range" id="horizontalOffset" class="setting-input" min="-50" max="50" value="0" step="1">
+              <span class="setting-value" id="horizontalOffsetValue">0%</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Vertical Offset (%)</label>
+              <input type="range" id="verticalOffset" class="setting-input" min="-50" max="50" value="0" step="1">
+              <span class="setting-value" id="verticalOffsetValue">0%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Text Styling Settings -->
+        <div class="settings-section">
+          <div class="settings-section-title">Text Styling</div>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label class="setting-label">Font Size (Min)</label>
+              <input type="range" id="fontSizeMin" class="setting-input" min="12" max="60" value="24" step="2">
+              <span class="setting-value" id="fontSizeMinValue">24px</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Font Size (Max)</label>
+              <input type="range" id="fontSizeMax" class="setting-input" min="24" max="120" value="48" step="2">
+              <span class="setting-value" id="fontSizeMaxValue">48px</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Font Family</label>
+              <select id="fontFamily" class="setting-select">
+                <option value="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" selected>System Default</option>
+                <option value="Arial, sans-serif">Arial</option>
+                <option value="'Helvetica Neue', Helvetica, sans-serif">Helvetica</option>
+                <option value="Georgia, serif">Georgia</option>
+                <option value="'Times New Roman', Times, serif">Times New Roman</option>
+                <option value="'Courier New', Courier, monospace">Courier New</option>
+                <option value="Verdana, sans-serif">Verdana</option>
+              </select>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Line Height</label>
+              <input type="range" id="lineHeight" class="setting-input" min="10" max="30" value="16" step="1">
+              <span class="setting-value" id="lineHeightValue">1.6</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Text Color</label>
+              <div class="color-input-wrapper">
+                <input type="color" id="textColor" class="color-picker" value="#ffffff">
+                <input type="text" id="textColorHex" class="setting-input" value="#ffffff" placeholder="#ffffff">
+              </div>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Text Shadow Intensity</label>
+              <input type="range" id="textShadow" class="setting-input" min="0" max="10" value="8" step="1">
+              <span class="setting-value" id="textShadowValue">8 (High)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Animation Settings -->
+        <div class="settings-section">
+          <div class="settings-section-title">Animation</div>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label class="setting-label">Fade In Duration (ms)</label>
+              <input type="range" id="fadeInDuration" class="setting-input" min="0" max="1000" value="300" step="50">
+              <span class="setting-value" id="fadeInDurationValue">300ms</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Fade Out Duration (ms)</label>
+              <input type="range" id="fadeOutDuration" class="setting-input" min="0" max="1000" value="300" step="50">
+              <span class="setting-value" id="fadeOutDurationValue">300ms</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Audio Settings -->
+        <div class="settings-section">
+          <div class="settings-section-title">Audio Processing</div>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label class="setting-label">Audio Buffer Size</label>
+              <input type="range" id="audioBufferSize" class="setting-input" min="512" max="8192" value="2048" step="256">
+              <span class="setting-value" id="audioBufferSizeValue">2048 samples (~128ms)</span>
+              <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">
+                Lower = less delay, higher = more stable<br>
+                <span style="opacity: 0.8;">Note: Restart recording to apply changes</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Behavior Settings -->
+        <div class="settings-section">
+          <div class="settings-section-title">Behavior</div>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label class="setting-label">Pause Threshold (ms)</label>
+              <input type="range" id="pauseThreshold" class="setting-input" min="1000" max="10000" value="5000" step="500">
+              <span class="setting-value" id="pauseThresholdValue">5000ms (5s)</span>
+            </div>
+            <div class="setting-item">
+              <label class="setting-label">Auto Clear</label>
+              <select id="autoClear" class="setting-select">
+                <option value="true" selected>Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <button class="reset-btn" id="resetSettings">Reset to Defaults</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * Professional Microphone Input Client
+     * Features:
+     * - Audio visualization (waveform)
+     * - Device selection
+     * - Real-time audio level monitoring
+     * - Professional UI/UX
+     */
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const audioInput = document.getElementById('audioInput');
+    const refreshDevicesBtn = document.getElementById('refreshDevices');
+    const waveform = document.getElementById('waveform');
+    const levelFill = document.getElementById('levelFill');
+    const levelText = document.getElementById('levelText');
+    const sampleRateEl = document.getElementById('sampleRate');
+    const channelsEl = document.getElementById('channels');
+    const formatEl = document.getElementById('format');
+    const connectionStatusEl = document.getElementById('connectionStatus');
+
+    let ws = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let processor = null;
+    let analyser = null;
+    let isRecording = false;
+    let animationFrameId = null;
+    let currentSettings = {};
+
+    // Create waveform bars
+    const barCount = 60;
+    for (let i = 0; i < barCount; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'wave-bar';
+      bar.style.height = '2px';
+      waveform.appendChild(bar);
+    }
+    const bars = waveform.querySelectorAll('.wave-bar');
+
+    /**
+     * Update status display
+     */
+    function updateStatus(message, type = '') {
+      statusText.textContent = message;
+      statusDot.className = 'status-dot ' + type;
+      connectionStatusEl.textContent = type === 'connected' ? 'Connected' : 
+                                       type === 'recording' ? 'Recording' : 'Disconnected';
+      console.log('📊 Status:', message);
+    }
+
+    /**
+     * Load audio input devices
+     */
+    async function loadAudioDevices() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        
+        audioInput.innerHTML = '';
+        
+        if (audioInputs.length === 0) {
+          audioInput.innerHTML = '<option value="">No microphones found</option>';
+          return;
+        }
+
+        audioInputs.forEach((device, index) => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.textContent = device.label || `Microphone ${index + 1}`;
+          audioInput.appendChild(option);
+        });
+
+        console.log('✅ Loaded', audioInputs.length, 'audio input devices');
+      } catch (error) {
+        console.error('❌ Error loading devices:', error);
+        audioInput.innerHTML = '<option value="">Error loading devices</option>';
+      }
+    }
+
+    /**
+     * Connect to WebSocket server
+     */
+    function connect() {
+      const wsUrl = 'ws://localhost:8080/client';
+      updateStatus('Connecting to server...', '');
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('✅ Connected to server');
+        updateStatus('Connected to server', 'connected');
+        startBtn.disabled = false;
+        
+        // Request configuration
+        ws.send(JSON.stringify({ type: 'config' }));
+        
+        // Send current settings if available
+        if (Object.keys(currentSettings).length > 0) {
+          ws.send(JSON.stringify({
+            type: 'settings',
+            settings: currentSettings
+          }));
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'config') {
+            console.log('📋 Server config:', data);
+            sampleRateEl.textContent = data.sampleRate + ' Hz';
+            channelsEl.textContent = data.channels;
+            formatEl.textContent = data.format;
+          }
+        } catch (e) {
+          console.log('📨 Server message:', event.data);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('❌ WebSocket error:', error);
+        updateStatus('Connection error', '');
+      };
+
+      ws.onclose = (event) => {
+        console.log('🔌 WebSocket closed:', event.code, event.reason);
+        updateStatus('Disconnected', '');
+        
+        // Only disable if not a temporary reconnection
+        if (event.code !== 1006) { // 1006 = abnormal closure, might be reconnecting
+          startBtn.disabled = true;
+          stopBtn.disabled = true;
+        }
+        
+        // Attempt to reconnect with exponential backoff (only if recording)
+        if (isRecording) {
+          let reconnectDelay = 1000;
+          const maxDelay = 10000;
+          let attempts = 0;
+          
+          const attemptReconnect = () => {
+            attempts++;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              return; // Already connected
+            }
+            
+            console.log(`🔄 Reconnecting... (attempt ${attempts})`);
+            connect();
+            
+            // If still not connected after delay, retry with longer delay
+            setTimeout(() => {
+              if (!ws || ws.readyState !== WebSocket.OPEN) {
+                reconnectDelay = Math.min(reconnectDelay * 1.5, maxDelay);
+                if (isRecording) {
+                  attemptReconnect();
+                }
+              }
+            }, reconnectDelay);
+          };
+          
+          attemptReconnect();
+        }
+      };
+    }
+
+    /**
+     * Update audio visualization
+     */
+    function updateVisualization() {
+      if (!analyser || !isRecording) {
+        // Reset visualization
+        bars.forEach(bar => bar.style.height = '2px');
+        levelFill.style.width = '0%';
+        levelText.textContent = '-∞ dB';
+        return;
+      }
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      analyser.getByteFrequencyData(dataArray);
+
+      // Update waveform bars
+      const barStep = Math.floor(bufferLength / barCount);
+      bars.forEach((bar, index) => {
+        const value = dataArray[index * barStep] || 0;
+        const height = Math.max(2, (value / 255) * 100);
+        bar.style.height = height + 'px';
+      });
+
+      // Update audio level meter
+      analyser.getByteTimeDomainData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        const normalized = (dataArray[i] - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / bufferLength);
+      const db = 20 * Math.log10(rms + 0.001); // Add small value to avoid log(0)
+      const levelPercent = Math.min(100, Math.max(0, (db + 60) / 60 * 100)); // Map -60dB to 0dB to 0-100%
+
+      levelFill.style.width = levelPercent + '%';
+      levelText.textContent = db.toFixed(1) + ' dB';
+
+      animationFrameId = requestAnimationFrame(updateVisualization);
+    }
+
+    /**
+     * Start recording from microphone
+     */
+    async function startRecording() {
+      try {
+        updateStatus('Requesting microphone access...', '');
+
+        const deviceId = audioInput.value;
+        const constraints = {
+          audio: {
+            deviceId: deviceId ? { exact: deviceId } : undefined,
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        };
+
+        // Get microphone stream
+        mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+        console.log('✅ Microphone access granted');
+        const audioTracks = mediaStream.getAudioTracks();
+        if (audioTracks.length > 0) {
+          console.log('🎤 Using device:', audioTracks[0].label);
+        }
+
+        // Create AudioContext at 16kHz
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(mediaStream);
+
+        // Create analyser for visualization
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        source.connect(analyser);
+
+        // Create ScriptProcessorNode for audio processing
+        // Use configurable buffer size from settings (default: 2048 = ~128ms at 16kHz)
+        const bufferSize = currentSettings.audioBufferSize || 2048;
+        console.log(`🎵 Using audio buffer size: ${bufferSize} samples (~${(bufferSize / 16000 * 1000).toFixed(0)}ms latency)`);
+        processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+        processor.onaudioprocess = (event) => {
+          if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+          const inputData = event.inputBuffer.getChannelData(0);
+          
+          // Convert Float32Array to Int16Array (PCM 16-bit) - optimized
+          const int16Array = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            const sample = Math.max(-1, Math.min(1, inputData[i]));
+            int16Array[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+          }
+
+          // Send audio data to server immediately (no batching for minimal delay)
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            try {
+              // Use direct array send for better performance
+              ws.send(JSON.stringify({
+                type: 'audio',
+                format: 'array',
+                data: Array.from(int16Array)
+              }));
+            } catch (error) {
+              // Handle connection errors gracefully
+              if (error.code === 'ECONNRESET' || error.message.includes('not open')) {
+                console.warn('⚠️ Connection lost, will reconnect');
+                connect();
+              }
+            }
+          }
+        };
+
+        // Connect nodes (must connect to destination for ScriptProcessorNode to work)
+        const dummyGain = audioContext.createGain();
+        dummyGain.gain.value = 0; // Mute output
+        source.connect(processor);
+        processor.connect(dummyGain);
+        dummyGain.connect(audioContext.destination);
+
+        isRecording = true;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        updateStatus('Recording... Sending to Soniox', 'recording');
+        
+        // Start visualization
+        updateVisualization();
+
+      } catch (error) {
+        console.error('❌ Error starting recording:', error);
+        updateStatus('Error: ' + error.message, '');
+        alert('Failed to access microphone: ' + error.message);
+      }
+    }
+
+    /**
+     * Stop recording
+     */
+    function stopRecording() {
+      isRecording = false;
+
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+
+      if (processor) {
+        processor.disconnect();
+        processor = null;
+      }
+
+      if (analyser) {
+        analyser.disconnect();
+        analyser = null;
+      }
+
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+
+      // Reset visualization
+      bars.forEach(bar => bar.style.height = '2px');
+      levelFill.style.width = '0%';
+      levelText.textContent = '-∞ dB';
+
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      updateStatus('Stopped', 'connected');
+    }
+
+    /**
+     * Initialize Settings Panel
+     */
+    function initializeSettings() {
+      // Sidebar toggle button
+      const settingsToggleBtn = document.getElementById('settingsToggleBtn');
+      const settingsSidebar = document.getElementById('settingsSidebar');
+      
+      // Load sidebar state from localStorage
+      const sidebarCollapsed = localStorage.getItem('settingsSidebarCollapsed') === 'true';
+      if (sidebarCollapsed) {
+        settingsSidebar.classList.add('collapsed');
+      }
+
+      settingsToggleBtn.addEventListener('click', () => {
+        settingsSidebar.classList.toggle('collapsed');
+        const isCollapsed = settingsSidebar.classList.contains('collapsed');
+        localStorage.setItem('settingsSidebarCollapsed', isCollapsed.toString());
+      });
+
+      // Initialize all setting inputs
+      initializeSettingInputs();
+      
+      // Load saved settings from localStorage
+      loadSettings();
+    }
+
+    /**
+     * Initialize setting input handlers
+     */
+    function initializeSettingInputs() {
+      // Range inputs with value display
+      const rangeInputs = [
+        { id: 'maxLines', valueId: 'maxLinesValue', format: (v) => `${v} lines` },
+        { id: 'wordsPerLine', valueId: 'wordsPerLineValue', format: (v) => `${v} words` },
+        { id: 'linePersistence', valueId: 'linePersistenceValue', format: (v) => `${v} lines` },
+        { id: 'maxWidth', valueId: 'maxWidthValue', format: (v) => `${v}%` },
+        { id: 'horizontalOffset', valueId: 'horizontalOffsetValue', format: (v) => `${v > 0 ? '+' : ''}${v}%` },
+        { id: 'verticalOffset', valueId: 'verticalOffsetValue', format: (v) => `${v > 0 ? '+' : ''}${v}%` },
+        { id: 'fontSizeMin', valueId: 'fontSizeMinValue', format: (v) => `${v}px` },
+        { id: 'fontSizeMax', valueId: 'fontSizeMaxValue', format: (v) => `${v}px` },
+        { id: 'lineHeight', valueId: 'lineHeightValue', format: (v) => (v / 10).toFixed(1) },
+        { id: 'textShadow', valueId: 'textShadowValue', format: (v) => {
+          const labels = ['None', 'Very Low', 'Low', 'Medium', 'High', 'Very High'];
+          return `${v} (${labels[Math.min(v, labels.length - 1)]})`;
+        }},
+        { id: 'fadeInDuration', valueId: 'fadeInDurationValue', format: (v) => `${v}ms` },
+        { id: 'fadeOutDuration', valueId: 'fadeOutDurationValue', format: (v) => `${v}ms` },
+        { id: 'pauseThreshold', valueId: 'pauseThresholdValue', format: (v) => `${v}ms (${v/1000}s)` },
+        { id: 'audioBufferSize', valueId: 'audioBufferSizeValue', format: (v) => {
+          const latency = (v / 16000 * 1000).toFixed(0);
+          return `${v} samples (~${latency}ms)`;
+        }}
+      ];
+
+      rangeInputs.forEach(({ id, valueId, format }) => {
+        const input = document.getElementById(id);
+        const valueDisplay = document.getElementById(valueId);
+        
+        if (input && valueDisplay) {
+          input.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            valueDisplay.textContent = format(value);
+            updateSettings();
+          });
+        }
+      });
+
+      // Select inputs
+      const selectInputs = ['horizontalAlign', 'verticalAlign', 'fontFamily', 'autoClear'];
+      selectInputs.forEach(id => {
+        const input = document.getElementById(id);
+        if (input) {
+          input.addEventListener('change', () => {
+            updateSettings();
+          });
+        }
+      });
+
+      // Color inputs
+      const textColorInput = document.getElementById('textColor');
+      const textColorHex = document.getElementById('textColorHex');
+      
+      if (textColorInput && textColorHex) {
+        textColorInput.addEventListener('input', (e) => {
+          textColorHex.value = e.target.value;
+          updateSettings();
+        });
+        
+        textColorHex.addEventListener('input', (e) => {
+          const hex = e.target.value;
+          if (/^#[0-9A-F]{6}$/i.test(hex)) {
+            textColorInput.value = hex;
+            updateSettings();
+          }
+        });
+      }
+
+      // Reset button
+      const resetBtn = document.getElementById('resetSettings');
+      if (resetBtn) {
+        resetBtn.addEventListener('click', resetSettings);
+      }
+    }
+
+    /**
+     * Collect all settings and send to server
+     */
+    function updateSettings() {
+      const settings = {
+        // Layout
+        maxLines: parseInt(document.getElementById('maxLines').value),
+        wordsPerLine: parseInt(document.getElementById('wordsPerLine').value),
+        linePersistence: parseInt(document.getElementById('linePersistence').value),
+        maxWidth: parseInt(document.getElementById('maxWidth').value),
+        
+        // Positioning
+        horizontalAlign: document.getElementById('horizontalAlign').value,
+        verticalAlign: document.getElementById('verticalAlign').value,
+        horizontalOffset: parseInt(document.getElementById('horizontalOffset').value),
+        verticalOffset: parseInt(document.getElementById('verticalOffset').value),
+        
+        // Text Styling
+        fontSizeMin: parseInt(document.getElementById('fontSizeMin').value),
+        fontSizeMax: parseInt(document.getElementById('fontSizeMax').value),
+        fontFamily: document.getElementById('fontFamily').value,
+        lineHeight: parseFloat(document.getElementById('lineHeight').value) / 10,
+        textColor: document.getElementById('textColor').value,
+        textShadow: parseInt(document.getElementById('textShadow').value),
+        
+        // Animation
+        fadeInDuration: parseInt(document.getElementById('fadeInDuration').value),
+        fadeOutDuration: parseInt(document.getElementById('fadeOutDuration').value),
+        
+        // Behavior
+        pauseThreshold: parseInt(document.getElementById('pauseThreshold').value),
+        autoClear: document.getElementById('autoClear').value === 'true',
+        
+        // Audio Processing
+        audioBufferSize: parseInt(document.getElementById('audioBufferSize').value)
+      };
+
+      currentSettings = settings;
+      
+      // Save to localStorage
+      localStorage.setItem('captionSettings', JSON.stringify(settings));
+
+      // Send to server
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'settings',
+          settings: settings
+        }));
+        console.log('📤 Settings sent to server:', settings);
+      }
+    }
+
+    /**
+     * Load settings from localStorage
+     */
+    function loadSettings() {
+      const saved = localStorage.getItem('captionSettings');
+      if (saved) {
+        try {
+          const settings = JSON.parse(saved);
+          applySettingsToUI(settings);
+          currentSettings = settings;
+        } catch (e) {
+          console.error('Error loading settings:', e);
+        }
+      }
+    }
+
+    /**
+     * Apply settings to UI inputs
+     */
+    function applySettingsToUI(settings) {
+      if (settings.maxLines !== undefined) document.getElementById('maxLines').value = settings.maxLines;
+      if (settings.wordsPerLine !== undefined) document.getElementById('wordsPerLine').value = settings.wordsPerLine;
+      if (settings.linePersistence !== undefined) document.getElementById('linePersistence').value = settings.linePersistence;
+      if (settings.maxWidth !== undefined) document.getElementById('maxWidth').value = settings.maxWidth;
+      if (settings.horizontalAlign !== undefined) document.getElementById('horizontalAlign').value = settings.horizontalAlign;
+      if (settings.verticalAlign !== undefined) document.getElementById('verticalAlign').value = settings.verticalAlign;
+      if (settings.horizontalOffset !== undefined) document.getElementById('horizontalOffset').value = settings.horizontalOffset;
+      if (settings.verticalOffset !== undefined) document.getElementById('verticalOffset').value = settings.verticalOffset;
+      if (settings.fontSizeMin !== undefined) document.getElementById('fontSizeMin').value = settings.fontSizeMin;
+      if (settings.fontSizeMax !== undefined) document.getElementById('fontSizeMax').value = settings.fontSizeMax;
+      if (settings.fontFamily !== undefined) document.getElementById('fontFamily').value = settings.fontFamily;
+      if (settings.lineHeight !== undefined) document.getElementById('lineHeight').value = Math.round(settings.lineHeight * 10);
+      if (settings.textColor !== undefined) {
+        document.getElementById('textColor').value = settings.textColor;
+        document.getElementById('textColorHex').value = settings.textColor;
+      }
+      if (settings.textShadow !== undefined) document.getElementById('textShadow').value = settings.textShadow;
+      if (settings.fadeInDuration !== undefined) document.getElementById('fadeInDuration').value = settings.fadeInDuration;
+      if (settings.fadeOutDuration !== undefined) document.getElementById('fadeOutDuration').value = settings.fadeOutDuration;
+      if (settings.pauseThreshold !== undefined) document.getElementById('pauseThreshold').value = settings.pauseThreshold;
+      if (settings.autoClear !== undefined) document.getElementById('autoClear').value = settings.autoClear.toString();
+      if (settings.audioBufferSize !== undefined) document.getElementById('audioBufferSize').value = settings.audioBufferSize;
+
+      // Trigger value updates
+      document.querySelectorAll('input[type="range"]').forEach(input => {
+        input.dispatchEvent(new Event('input'));
+      });
+    }
+
+    /**
+     * Reset settings to defaults
+     */
+    function resetSettings() {
+      const defaults = {
+        maxLines: 5,
+        wordsPerLine: 15,
+        linePersistence: 5,
+        maxWidth: 80,
+        horizontalAlign: 'center',
+        verticalAlign: 'center',
+        horizontalOffset: 0,
+        verticalOffset: 0,
+        fontSizeMin: 24,
+        fontSizeMax: 48,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+        lineHeight: 1.6,
+        textColor: '#ffffff',
+        textShadow: 8,
+        fadeInDuration: 300,
+        fadeOutDuration: 300,
+        pauseThreshold: 5000,
+        autoClear: true,
+        audioBufferSize: 2048
+      };
+
+      applySettingsToUI(defaults);
+      updateSettings();
+    }
+
+    // Event listeners
+    startBtn.addEventListener('click', startRecording);
+    stopBtn.addEventListener('click', stopRecording);
+    refreshDevicesBtn.addEventListener('click', loadAudioDevices);
+
+    // Initialize on load
+    window.addEventListener('load', async () => {
+      // Initialize settings panel
+      initializeSettings();
+      
+      // Request microphone permission to get device labels
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        await loadAudioDevices();
+        // Stop the stream immediately (we just needed permission)
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+      } catch (error) {
+        console.log('⚠️ Permission not granted yet, will request when starting');
+        await loadAudioDevices();
+      }
+      
+      connect();
+    });
+
+    // Cleanup on unload
+    window.addEventListener('beforeunload', () => {
+      stopRecording();
+      if (ws) {
+        ws.close();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  captions-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jgm-live-captions
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - PORT=8080
+      - NODE_ENV=production
+    volumes:
+      # Optional: Mount .env file if you want to edit it without rebuilding
+      - ./.env:/app/.env:ro
+    networks:
+      - captions-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+networks:
+  captions-network:
+    driver: bridge
+
