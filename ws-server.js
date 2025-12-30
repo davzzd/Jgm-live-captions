@@ -172,6 +172,14 @@ wssClients.on('connection', (ws) => {
             }));
           }
         });
+      } else if (data.type === 'clear') {
+        // Clear captions on all display clients
+        console.log('🧹 Clearing captions on all displays');
+        captionClients.forEach(client => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ type: 'clear' }));
+          }
+        });
       }
     } catch (error) {
       console.error('❌ Error processing client message:', error);

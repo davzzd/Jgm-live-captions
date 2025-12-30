@@ -312,6 +312,25 @@
     }
 
     /**
+     * Clear captions immediately (called from server command)
+     */
+    function clearCaptions() {
+      console.log('🧹 Clearing captions');
+      accumulatedText = '';
+      subtitleText.textContent = '';
+      subtitleContainer.classList.remove('visible');
+      subtitleContainer.classList.add('empty');
+      
+      // Clear any pending timers
+      if (clearTimeoutId) {
+        clearTimeout(clearTimeoutId);
+        clearTimeoutId = null;
+      }
+      
+      lastUpdateTime = 0; // Reset update time
+    }
+
+    /**
      * Apply settings to the display
      * @param {Object} newSettings - Settings object
      */
@@ -473,7 +492,7 @@
 
         ws.onmessage = (event) => {
           try {
-            // Check if message is JSON (settings) or plain text (caption)
+            // Check if message is JSON (settings/clear) or plain text (caption)
             let data;
             try {
               data = JSON.parse(event.data);
@@ -481,6 +500,11 @@
                 // Apply settings
                 applySettings(data.settings);
                 console.log('✅ Settings applied:', data.settings);
+                return;
+              } else if (data.type === 'clear') {
+                // Clear captions
+                clearCaptions();
+                console.log('🧹 Captions cleared');
                 return;
               }
             } catch (e) {

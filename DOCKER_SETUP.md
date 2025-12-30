@@ -185,3 +185,4 @@ docker rmi captions-app_captions-app
 - Container automatically restarts unless stopped manually
 - Health checks ensure the service is running correctly
 
+

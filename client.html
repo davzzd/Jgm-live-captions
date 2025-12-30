@@ -285,6 +285,21 @@
       color: #040D12;
     }
 
+    .btn-clear {
+      background: rgba(147, 177, 166, 0.2);
+      color: #93B1A6;
+      border: 1px solid #5C8374;
+      font-weight: 600;
+    }
+
+    .btn-clear:hover:not(:disabled) {
+      background: rgba(92, 131, 116, 0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(92, 131, 116, 0.3);
+      color: #93B1A6;
+      border-color: #93B1A6;
+    }
+
     button:disabled {
       opacity: 0.5;
       cursor: not-allowed;
@@ -653,6 +668,7 @@
       <div class="controls">
         <button id="startBtn" class="btn-start">Start Recording</button>
         <button id="stopBtn" class="btn-stop" disabled>Stop Recording</button>
+        <button id="clearBtn" class="btn-clear">Clear Captions</button>
       </div>
 
       <div class="info-grid">
@@ -862,6 +878,7 @@
 
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const clearBtn = document.getElementById('clearBtn');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const audioInput = document.getElementById('audioInput');
@@ -1434,9 +1451,22 @@
       updateSettings();
     }
 
+    /**
+     * Clear captions on display
+     */
+    function clearCaptions() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'clear' }));
+        console.log('🧹 Sent clear captions command');
+      } else {
+        console.warn('⚠️ Cannot clear captions - not connected to server');
+      }
+    }
+
     // Event listeners
     startBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
+    clearBtn.addEventListener('click', clearCaptions);
     refreshDevicesBtn.addEventListener('click', loadAudioDevices);
 
     // Initialize on load
