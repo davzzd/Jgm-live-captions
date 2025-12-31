@@ -14,7 +14,10 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const axios = require('axios');
-require('dotenv').config();
+const path = require('path');
+
+// Load .env file from the same directory as this script
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const server = http.createServer(app);
@@ -36,8 +39,9 @@ const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
 const SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '885a41baf0c85746228dd44ab442c3770e2c69f4f6f22bb7e3244de0d6d7899c';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
-// YouTube Captions configuration (optional - only used if YOUTUBE_CAPTIONS_URL is set)
-const YOUTUBE_CAPTIONS_URL = process.env.YOUTUBE_CAPTIONS_URL;
+// YouTube Captions configuration (optional - only used if YOUTUBE_CAPTION_URL is set)
+// Support both YOUTUBE_CAPTION_URL (singular) and YOUTUBE_CAPTIONS_URL (plural) for compatibility
+const YOUTUBE_CAPTIONS_URL = process.env.YOUTUBE_CAPTION_URL || process.env.YOUTUBE_CAPTIONS_URL;
 const YOUTUBE_CAPTIONS_LANGUAGE = process.env.LANGUAGE || 'en';
 
 let sonioxWs = null;
@@ -96,6 +100,7 @@ class YouTubeCaptionPublisher {
     this.postUrl = postUrl;
     this.language = language;
     this.enabled = !!postUrl;
+    this.sequenceNumber = 0; // YouTube requires incremental sequence numbers
   }
 
   async publish(caption) {
@@ -108,55 +113,102 @@ class YouTubeCaptionPublisher {
       return;
     }
 
-    const payload = {
-      text: formattedCaption,
-      lang: this.language,
-    };
+    // Always log when attempting to send to YouTube
+    console.log('📤 Sending caption to YouTube:', formattedCaption.substring(0, 50) + (formattedCaption.length > 50 ? '...' : ''));
 
+    const startTime = Date.now();
     try {
-      // Send as form data (application/x-www-form-urlencoded)
-      // Match Python implementation: data={text: caption, lang: LANGUAGE}
-      const formData = new URLSearchParams();
-      formData.append('text', formattedCaption);
-      formData.append('lang', this.language);
+      // Increment sequence number for YouTube (required for live captions)
+      this.sequenceNumber++;
+      
+      // Build URL with sequence number and language as query parameters
+      const urlWithParams = `${this.postUrl}${this.postUrl.includes('?') ? '&' : '?'}seq=${this.sequenceNumber}&lang=${this.language}`;
+      
+      // Generate timestamp in UTC format: YYYY-MM-DDTHH:MM:SS.mmm
+      const now = new Date();
+      const timestamp = now.toISOString().replace('Z', '').substring(0, 23); // Remove 'Z' and keep milliseconds
+      
+      // Clean caption text - remove control characters and collapse whitespace
+      let captionClean = formattedCaption.replace(/[\x00-\x1F]/g, ' '); // Replace control chars with space
+      captionClean = captionClean.replace(/\s+/g, ' ').trim(); // Collapse multiple spaces
+      
+      // YouTube expects: timestamp\ncaption\n (with trailing newline)
+      const payload = `${timestamp}\n${captionClean}\n`;
+      const payloadBytes = Buffer.from(payload, 'utf-8');
 
+      console.log(`   URL: ${urlWithParams}`);
+      console.log(`   Timestamp: ${timestamp}`);
+      console.log(`   Sequence: ${this.sequenceNumber}`);
+      console.log(`   Payload length: ${payloadBytes.length} bytes`);
+      console.log(`   Payload preview: ${payload.substring(0, 100).replace(/\n/g, '\\n')}...`);
+      
       const response = await axios.post(
-        this.postUrl,
-        formData.toString(),
+        urlWithParams,
+        payloadBytes,
         {
-          timeout: 2000,
+          timeout: 10000, // 10 second timeout
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Type': 'text/plain; charset=utf-8',
+            'User-Agent': 'Soniox-Streamer/1.0',
           },
         }
       );
 
+      const duration = Date.now() - startTime;
+
       if (response.status === 200) {
-        console.log('✅ Caption sent to YouTube');
+        console.log(`✅ YouTube caption sent successfully (${duration}ms) - Status: ${response.status}`);
+        if (response.data) {
+          console.log(`   Response: ${JSON.stringify(response.data).substring(0, 100)}`);
+        } else {
+          console.log(`   Response: (empty body)`);
+        }
       } else {
         console.warn(`⚠️ YouTube caption POST returned status ${response.status}: ${response.statusText}`);
+        if (response.data) {
+          console.warn(`   Response body: ${JSON.stringify(response.data).substring(0, 200)}`);
+        }
       }
     } catch (error) {
-      // Only log errors occasionally to avoid spam
-      if (Math.random() < 0.1) {
-        if (error.response) {
-          console.warn(`⚠️ YouTube caption POST failed: ${error.response.status} ${error.response.statusText}`);
-        } else if (error.request) {
-          console.warn('⚠️ YouTube caption POST failed: No response received');
-        } else {
-          console.warn('⚠️ YouTube caption POST error:', error.message);
+      // Always log errors (not just 10% of the time) so user knows what's happening
+      const duration = Date.now() - startTime;
+      if (error.response) {
+        // Server responded with error status
+        console.error(`❌ YouTube caption POST failed: ${error.response.status} ${error.response.statusText} (${duration}ms)`);
+        if (error.response.data) {
+          console.error(`   Error response: ${JSON.stringify(error.response.data).substring(0, 200)}`);
         }
+      } else if (error.request) {
+        // Request was made but no response received
+        console.error(`❌ YouTube caption POST failed: No response received (timeout or network error) (${duration}ms)`);
+        console.error(`   URL: ${this.postUrl}`);
+        console.error(`   Error code: ${error.code || 'N/A'}`);
+      } else {
+        // Error setting up the request
+        console.error(`❌ YouTube caption POST error: ${error.message}`);
+        console.error(`   Stack: ${error.stack?.substring(0, 200)}`);
       }
     }
   }
 }
 
 // Initialize YouTube Caption Publisher (only if URL is configured)
+// Debug: Check if environment variable is loaded
+if (process.env.YOUTUBE_CAPTION_URL || process.env.YOUTUBE_CAPTIONS_URL) {
+  const url = process.env.YOUTUBE_CAPTION_URL || process.env.YOUTUBE_CAPTIONS_URL;
+  console.log('📺 YouTube caption URL found in env:', url.substring(0, 50) + '...');
+} else {
+  console.log('📺 YouTube caption URL not found in process.env');
+  console.log('📺 Available env vars with YOUTUBE:', Object.keys(process.env).filter(k => k.includes('YOUTUBE') || k.includes('youtube')));
+}
+
 const youtubePublisher = new YouTubeCaptionPublisher(YOUTUBE_CAPTIONS_URL, YOUTUBE_CAPTIONS_LANGUAGE);
 if (youtubePublisher.enabled) {
-  console.log('📺 YouTube captions enabled:', YOUTUBE_CAPTIONS_URL);
+  console.log('📺 YouTube captions enabled:', YOUTUBE_CAPTIONS_URL.substring(0, 50) + '...');
 } else {
-  console.log('📺 YouTube captions disabled (YOUTUBE_CAPTIONS_URL not set)');
+  console.log('📺 YouTube captions disabled (YOUTUBE_CAPTION_URL or YOUTUBE_CAPTIONS_URL not set)');
+  console.log('📺 Tip: Make sure .env file is in the same directory as ws-server.js');
+  console.log('📺 Tip: Restart the server after adding/editing .env file');
 }
 
 /**
