@@ -36,6 +36,10 @@ const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
 const SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '885a41baf0c85746228dd44ab442c3770e2c69f4f6f22bb7e3244de0d6d7899c';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
+// YouTube Captions configuration (optional - only used if YOUTUBE_CAPTIONS_URL is set)
+const YOUTUBE_CAPTIONS_URL = process.env.YOUTUBE_CAPTIONS_URL;
+const YOUTUBE_CAPTIONS_LANGUAGE = process.env.LANGUAGE || 'en';
+
 let sonioxWs = null;
 let isSonioxConfigured = false;
 let captionClients = new Set(); // Connected caption display clients
@@ -47,6 +51,113 @@ const MAX_RECONNECT_ATTEMPTS = Infinity; // Allow infinite reconnects for long s
 const RECONNECT_DELAY = 2000; // Start with 2s, will use exponential backoff
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 let heartbeatInterval = null;
+
+/**
+ * Format caption text for YouTube Live (YouTube-safe format)
+ * YouTube Live caption best practice:
+ * - ≤ 2 lines
+ * - ≤ 32 chars per line
+ * - UNIX newline
+ */
+function formatYouTubeCaption(text) {
+  if (!text) return '';
+  
+  const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+  const lines = [];
+  let current = '';
+
+  for (const word of words) {
+    if (current.length + word.length + 1 <= 32) {
+      current = current ? `${current} ${word}` : word;
+    } else {
+      if (current) {
+        lines.push(current);
+        current = word;
+        if (lines.length === 2) {
+          break; // Max 2 lines
+        }
+      }
+    }
+  }
+
+  if (current && lines.length < 2) {
+    lines.push(current);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * YouTube Caption Publisher
+ * Sends captions to YouTube Live via POST request
+ */
+class YouTubeCaptionPublisher {
+  constructor(postUrl, language) {
+    this.postUrl = postUrl;
+    this.language = language;
+    this.enabled = !!postUrl;
+  }
+
+  async publish(caption) {
+    if (!this.enabled || !caption) {
+      return;
+    }
+
+    const formattedCaption = formatYouTubeCaption(caption);
+    if (!formattedCaption) {
+      return;
+    }
+
+    const payload = {
+      text: formattedCaption,
+      lang: this.language,
+    };
+
+    try {
+      // Send as form data (application/x-www-form-urlencoded)
+      // Match Python implementation: data={text: caption, lang: LANGUAGE}
+      const formData = new URLSearchParams();
+      formData.append('text', formattedCaption);
+      formData.append('lang', this.language);
+
+      const response = await axios.post(
+        this.postUrl,
+        formData.toString(),
+        {
+          timeout: 2000,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+        }
+      );
+
+      if (response.status === 200) {
+        console.log('✅ Caption sent to YouTube');
+      } else {
+        console.warn(`⚠️ YouTube caption POST returned status ${response.status}: ${response.statusText}`);
+      }
+    } catch (error) {
+      // Only log errors occasionally to avoid spam
+      if (Math.random() < 0.1) {
+        if (error.response) {
+          console.warn(`⚠️ YouTube caption POST failed: ${error.response.status} ${error.response.statusText}`);
+        } else if (error.request) {
+          console.warn('⚠️ YouTube caption POST failed: No response received');
+        } else {
+          console.warn('⚠️ YouTube caption POST error:', error.message);
+        }
+      }
+    }
+  }
+}
+
+// Initialize YouTube Caption Publisher (only if URL is configured)
+const youtubePublisher = new YouTubeCaptionPublisher(YOUTUBE_CAPTIONS_URL, YOUTUBE_CAPTIONS_LANGUAGE);
+if (youtubePublisher.enabled) {
+  console.log('📺 YouTube captions enabled:', YOUTUBE_CAPTIONS_URL);
+} else {
+  console.log('📺 YouTube captions disabled (YOUTUBE_CAPTIONS_URL not set)');
+}
 
 /**
  * Broadcast text to all caption clients (optimized)
@@ -312,6 +423,13 @@ function connectToSoniox() {
             
             // Broadcast translated text (live updates) - optimized
             broadcastToCaptions(translatedText);
+            
+            // Send to YouTube (only final results)
+            if (isFinal) {
+              youtubePublisher.publish(translatedText).catch(err => {
+                // Error already logged in publish method
+              });
+            }
           }
           return; // Don't process further if this is translation-only
         }
@@ -328,6 +446,13 @@ function connectToSoniox() {
             
             // Broadcast translated text (live updates) - optimized
             broadcastToCaptions(translatedText);
+            
+            // Send to YouTube (only final results)
+            if (isFinal) {
+              youtubePublisher.publish(translatedText).catch(err => {
+                // Error already logged in publish method
+              });
+            }
           } else if (originalText) {
             // No translation yet, but we have original - send it for live feel
             // (User will see Malayalam until translation arrives)
