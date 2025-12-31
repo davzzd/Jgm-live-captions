@@ -342,35 +342,48 @@
       const container = subtitleContainer;
       const text = subtitleText;
       
-      // Positioning
+      // Positioning - Build transform X and Y components separately
       let left = '50%';
       let top = '50%';
-      let transform = 'translate(-50%, -50%)';
+      let translateX = '';
+      let translateY = '';
       
+      // Calculate horizontal (X) component
       if (settings.horizontalAlign === 'left') {
         left = '0%';
-        transform = `translate(${settings.horizontalOffset}%, -50%)`;
+        const hOffset = settings.horizontalOffset || 0;
+        translateX = hOffset !== 0 ? `${hOffset}%` : '0%';
       } else if (settings.horizontalAlign === 'right') {
         left = '100%';
-        transform = `translate(calc(-100% + ${settings.horizontalOffset}%), -50%)`;
+        const hOffset = settings.horizontalOffset || 0;
+        translateX = hOffset !== 0 ? `calc(-100% + ${hOffset}%)` : '-100%';
       } else {
         // center
         left = '50%';
-        transform = `translate(calc(-50% + ${settings.horizontalOffset}%), -50%)`;
+        const hOffset = settings.horizontalOffset || 0;
+        translateX = hOffset !== 0 ? `calc(-50% + ${hOffset}%)` : '-50%';
       }
       
+      // Calculate vertical (Y) component
+      // Use vh units for offset to ensure it's relative to viewport height, not container height
+      const vOffset = settings.verticalOffset || 0;
       if (settings.verticalAlign === 'top') {
         top = '0%';
-        transform = transform.replace('-50%', `${settings.verticalOffset}%`);
+        // For top alignment: start at top, then offset by vh units
+        translateY = vOffset !== 0 ? `${vOffset}vh` : '0';
       } else if (settings.verticalAlign === 'bottom') {
         top = '100%';
-        transform = transform.replace('-50%', `calc(-100% + ${settings.verticalOffset}%)`);
+        // For bottom alignment: move up by 100% of container height, then offset by vh units
+        translateY = vOffset !== 0 ? `calc(-100% + ${vOffset}vh)` : '-100%';
       } else {
         // center
         top = '50%';
-        const yOffset = settings.verticalOffset;
-        transform = transform.replace('-50%', `calc(-50% + ${yOffset}%)`);
+        // For center alignment: move up by 50% of container height, then offset by vh units
+        translateY = vOffset !== 0 ? `calc(-50% + ${vOffset}vh)` : '-50%';
       }
+      
+      // Combine X and Y into transform
+      const transform = `translate(${translateX}, ${translateY})`;
       
       container.style.left = left;
       container.style.top = top;

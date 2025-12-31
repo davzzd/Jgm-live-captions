@@ -755,9 +755,9 @@
               <span class="setting-value" id="horizontalOffsetValue">0%</span>
             </div>
             <div class="setting-item">
-              <label class="setting-label">Vertical Offset (%)</label>
+              <label class="setting-label">Vertical Offset (vh)</label>
               <input type="range" id="verticalOffset" class="setting-input" min="-50" max="50" value="0" step="1">
-              <span class="setting-value" id="verticalOffsetValue">0%</span>
+              <span class="setting-value" id="verticalOffsetValue">0vh</span>
             </div>
           </div>
         </div>
@@ -1253,7 +1253,7 @@
         { id: 'linePersistence', valueId: 'linePersistenceValue', format: (v) => `${v} lines` },
         { id: 'maxWidth', valueId: 'maxWidthValue', format: (v) => `${v}%` },
         { id: 'horizontalOffset', valueId: 'horizontalOffsetValue', format: (v) => `${v > 0 ? '+' : ''}${v}%` },
-        { id: 'verticalOffset', valueId: 'verticalOffsetValue', format: (v) => `${v > 0 ? '+' : ''}${v}%` },
+        { id: 'verticalOffset', valueId: 'verticalOffsetValue', format: (v) => `${v > 0 ? '+' : ''}${v}vh` },
         { id: 'fontSizeMin', valueId: 'fontSizeMinValue', format: (v) => `${v}px` },
         { id: 'fontSizeMax', valueId: 'fontSizeMaxValue', format: (v) => `${v}px` },
         { id: 'lineHeight', valueId: 'lineHeightValue', format: (v) => (v / 10).toFixed(1) },
