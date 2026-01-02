@@ -644,7 +644,15 @@
         </div>
 
         <div class="device-selector">
-          <label for="audioInput">Microphone Input</label>
+          <label for="audioSource">Audio Source</label>
+          <select id="audioSource" style="margin-bottom: 15px;">
+            <option value="microphone">🎤 Microphone</option>
+            <option value="tab">🖥️ Tab/System Audio (Screen Share)</option>
+          </select>
+        </div>
+
+        <div class="device-selector" id="microphoneSelector">
+          <label for="audioInput">Microphone Device</label>
           <select id="audioInput">
             <option value="">Loading devices...</option>
           </select>
@@ -881,7 +889,9 @@
     const clearBtn = document.getElementById('clearBtn');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
+    const audioSource = document.getElementById('audioSource');
     const audioInput = document.getElementById('audioInput');
+    const microphoneSelector = document.getElementById('microphoneSelector');
     const refreshDevicesBtn = document.getElementById('refreshDevices');
     const waveform = document.getElementById('waveform');
     const levelFill = document.getElementById('levelFill');
@@ -1078,31 +1088,79 @@
     }
 
     /**
-     * Start recording from microphone
+     * Start recording from microphone or tab audio
      */
     async function startRecording() {
       try {
-        updateStatus('Requesting microphone access...', '');
+        const sourceType = audioSource.value;
 
-        const deviceId = audioInput.value;
-        const constraints = {
-          audio: {
-            deviceId: deviceId ? { exact: deviceId } : undefined,
-            sampleRate: 16000,
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
+        if (sourceType === 'tab') {
+          // Tab/System Audio Mode - using getDisplayMedia
+          updateStatus('Select tab or screen to capture audio...', '');
+
+          const constraints = {
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false
+            },
+            video: {
+              width: { ideal: 1 },
+              height: { ideal: 1 },
+              frameRate: { ideal: 1 }
+            }
+          };
+
+          try {
+            // Request screen/tab sharing with audio (video required by some browsers)
+            mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
+
+            // Check if audio track exists
+            const audioTracks = mediaStream.getAudioTracks();
+            if (audioTracks.length === 0) {
+              throw new Error('No audio track in selected source. Make sure to check "Share audio" when selecting a tab.');
+            }
+
+            // Stop and remove video track if present (we only need audio)
+            const videoTracks = mediaStream.getVideoTracks();
+            videoTracks.forEach(track => {
+              track.stop();
+              mediaStream.removeTrack(track);
+            });
+
+            console.log('✅ Tab audio access granted');
+            console.log('🖥️ Using source:', audioTracks[0].label);
+          } catch (error) {
+            if (error.name === 'NotAllowedError') {
+              throw new Error('Screen sharing permission denied. Please allow screen sharing and make sure to check "Share audio".');
+            }
+            throw error;
           }
-        };
 
-        // Get microphone stream
-        mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+        } else {
+          // Microphone Mode - using getUserMedia
+          updateStatus('Requesting microphone access...', '');
 
-        console.log('✅ Microphone access granted');
-        const audioTracks = mediaStream.getAudioTracks();
-        if (audioTracks.length > 0) {
-          console.log('🎤 Using device:', audioTracks[0].label);
+          const deviceId = audioInput.value;
+          const constraints = {
+            audio: {
+              deviceId: deviceId ? { exact: deviceId } : undefined,
+              sampleRate: 16000,
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          };
+
+          // Get microphone stream
+          mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+          console.log('✅ Microphone access granted');
+          const audioTracks = mediaStream.getAudioTracks();
+          if (audioTracks.length > 0) {
+            console.log('🎤 Using device:', audioTracks[0].label);
+          }
         }
 
         // Create AudioContext at 16kHz
@@ -1462,6 +1520,15 @@
         console.warn('⚠️ Cannot clear captions - not connected to server');
       }
     }
+
+    // Toggle microphone selector visibility based on audio source
+    audioSource.addEventListener('change', () => {
+      if (audioSource.value === 'tab') {
+        microphoneSelector.style.display = 'none';
+      } else {
+        microphoneSelector.style.display = 'block';
+      }
+    });
 
     // Event listeners
     startBtn.addEventListener('click', startRecording);

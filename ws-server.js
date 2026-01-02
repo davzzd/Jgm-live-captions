@@ -15,9 +15,127 @@ const http = require('http');
 const WebSocket = require('ws');
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
 
 // Load .env file from the same directory as this script
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+// ===== LOGGING SYSTEM =====
+const LOG_FILE = path.join(__dirname, 'server.log');
+const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+
+// Caption history logging
+const CAPTIONS_LOG_FILE = path.join(__dirname, 'captions.log');
+const captionsStream = fs.createWriteStream(CAPTIONS_LOG_FILE, { flags: 'a' });
+const captionHistory = []; // In-memory store for current session (for quick access)
+
+// SSE clients for real-time streaming
+const transcriptSSEClients = new Set();
+const logsSSEClients = new Set();
+
+// Save original console methods FIRST (before any function uses them)
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+const originalConsoleWarn = console.warn;
+
+/**
+ * Enhanced logging function that logs to both console and file
+ * @param {string} level - Log level (INFO, ERROR, WARN, DEBUG)
+ * @param {string} message - Log message
+ * @param {...any} args - Additional arguments
+ */
+function log(level, message, ...args) {
+  const timestamp = new Date().toISOString();
+  const formattedMessage = args.length > 0
+    ? `${message} ${args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ')}`
+    : message;
+
+  const logEntry = `[${timestamp}] [${level}] ${formattedMessage}\n`;
+
+  // Write to file
+  logStream.write(logEntry);
+
+  // Broadcast to SSE clients
+  logsSSEClients.forEach(client => {
+    try {
+      client.write(`data: ${JSON.stringify({ timestamp, level, message: formattedMessage })}\n\n`);
+    } catch (err) {
+      logsSSEClients.delete(client);
+    }
+  });
+
+  // Also log to console using ORIGINAL methods (avoid infinite recursion)
+  const consoleMsg = `${message}`;
+  switch(level) {
+    case 'ERROR':
+      originalConsoleError(consoleMsg, ...args);
+      break;
+    case 'WARN':
+      originalConsoleWarn(consoleMsg, ...args);
+      break;
+    default:
+      originalConsoleLog(consoleMsg, ...args);
+  }
+}
+
+// Convenience functions
+const logger = {
+  info: (msg, ...args) => log('INFO', msg, ...args),
+  error: (msg, ...args) => log('ERROR', msg, ...args),
+  warn: (msg, ...args) => log('WARN', msg, ...args),
+  debug: (msg, ...args) => log('DEBUG', msg, ...args)
+};
+
+// Override console methods to capture all logs
+console.log = function(...args) {
+  log('INFO', args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+};
+
+console.error = function(...args) {
+  log('ERROR', args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+};
+
+console.warn = function(...args) {
+  log('WARN', args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+};
+
+/**
+ * Log a caption to the caption history
+ * @param {string} text - The caption text
+ * @param {boolean} isFinal - Whether this is a final caption
+ */
+function logCaption(text, isFinal = true) {
+  if (!text || !isFinal) return; // Only log final captions
+
+  const timestamp = new Date().toISOString();
+  const entry = {
+    timestamp,
+    text,
+    session: new Date().toISOString().split('T')[0] // Date as session ID
+  };
+
+  // Add to in-memory history (limit to last 1000 captions)
+  captionHistory.push(entry);
+  if (captionHistory.length > 1000) {
+    captionHistory.shift();
+  }
+
+  // Write to file (append)
+  const logLine = `${timestamp}\t${text}\n`;
+  captionsStream.write(logLine);
+
+  // Broadcast to SSE clients
+  const sseData = JSON.stringify(entry);
+  transcriptSSEClients.forEach(client => {
+    try {
+      client.write(`data: ${sseData}\n\n`);
+    } catch (err) {
+      transcriptSSEClients.delete(client);
+    }
+  });
+}
+
+logger.info('===== Server starting =====');
 
 const app = express();
 const server = http.createServer(app);
@@ -240,9 +358,695 @@ app.get('/', (req, res) => {
 });
 
 /**
+ * View logs endpoint - displays server logs in browser
+ */
+app.get('/logs', (req, res) => {
+  const limit = parseInt(req.query.limit) || 500; // Default to last 500 lines
+  const level = req.query.level; // Optional filter by level (INFO, ERROR, WARN, DEBUG)
+
+  fs.readFile(LOG_FILE, 'utf8', (err, data) => {
+    if (err) {
+      return res.status(500).send(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Server Logs - Error</title>
+            <style>
+              body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; }
+              .error { color: #f48771; }
+            </style>
+          </head>
+          <body>
+            <h1>Error Reading Logs</h1>
+            <p class="error">${err.message}</p>
+            <p>Log file may not exist yet. Start the server to generate logs.</p>
+          </body>
+        </html>
+      `);
+    }
+
+    let lines = data.split('\n').filter(line => line.trim());
+
+    // Filter by log level if specified
+    if (level) {
+      lines = lines.filter(line => line.includes(`[${level.toUpperCase()}]`));
+    }
+
+    // Get last N lines
+    const displayLines = lines.slice(-limit);
+
+    // Color code the logs
+    const coloredLogs = displayLines.map(line => {
+      if (line.includes('[ERROR]')) {
+        return `<div class="log-line error">${escapeHtml(line)}</div>`;
+      } else if (line.includes('[WARN]')) {
+        return `<div class="log-line warn">${escapeHtml(line)}</div>`;
+      } else if (line.includes('[DEBUG]')) {
+        return `<div class="log-line debug">${escapeHtml(line)}</div>`;
+      } else {
+        return `<div class="log-line info">${escapeHtml(line)}</div>`;
+      }
+    }).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Server Logs</title>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+              font-family: 'Courier New', monospace;
+              background: #1e1e1e;
+              color: #d4d4d4;
+              padding: 20px;
+              font-size: 13px;
+              line-height: 1.4;
+            }
+            .header {
+              position: sticky;
+              top: 0;
+              background: #2d2d30;
+              padding: 15px;
+              margin: -20px -20px 20px -20px;
+              border-bottom: 2px solid #3e3e42;
+              z-index: 100;
+            }
+            h1 {
+              color: #4ec9b0;
+              margin-bottom: 10px;
+              font-size: 20px;
+            }
+            .controls {
+              display: flex;
+              gap: 10px;
+              flex-wrap: wrap;
+              align-items: center;
+            }
+            .controls label {
+              color: #9cdcfe;
+              font-size: 12px;
+            }
+            .controls select, .controls input {
+              background: #3c3c3c;
+              color: #d4d4d4;
+              border: 1px solid #555;
+              padding: 5px 10px;
+              border-radius: 3px;
+              font-family: inherit;
+              font-size: 12px;
+            }
+            .controls button {
+              background: #0e639c;
+              color: white;
+              border: none;
+              padding: 6px 12px;
+              border-radius: 3px;
+              cursor: pointer;
+              font-family: inherit;
+              font-size: 12px;
+            }
+            .controls button:hover {
+              background: #1177bb;
+            }
+            .stats {
+              color: #858585;
+              margin-top: 10px;
+              font-size: 11px;
+            }
+            .logs-container {
+              background: #252526;
+              border: 1px solid #3e3e42;
+              border-radius: 4px;
+              padding: 15px;
+              overflow-x: auto;
+            }
+            .log-line {
+              padding: 2px 0;
+              white-space: pre-wrap;
+              word-break: break-all;
+            }
+            .log-line.error { color: #f48771; }
+            .log-line.warn { color: #dcdcaa; }
+            .log-line.info { color: #d4d4d4; }
+            .log-line.debug { color: #858585; }
+            .no-logs {
+              color: #858585;
+              text-align: center;
+              padding: 40px;
+              font-style: italic;
+            }
+            @media (max-width: 768px) {
+              body { padding: 10px; font-size: 11px; }
+              .header { margin: -10px -10px 10px -10px; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>📊 Server Logs</h1>
+            <div class="controls">
+              <label>
+                Filter:
+                <select id="levelFilter" onchange="updateFilter()">
+                  <option value="">All Levels</option>
+                  <option value="INFO" ${level === 'INFO' ? 'selected' : ''}>INFO</option>
+                  <option value="ERROR" ${level === 'ERROR' ? 'selected' : ''}>ERROR</option>
+                  <option value="WARN" ${level === 'WARN' ? 'selected' : ''}>WARN</option>
+                  <option value="DEBUG" ${level === 'DEBUG' ? 'selected' : ''}>DEBUG</option>
+                </select>
+              </label>
+              <label>
+                Lines:
+                <input type="number" id="limitInput" value="${limit}" min="10" max="10000" step="50" onchange="updateFilter()">
+              </label>
+              <button onclick="location.reload()">🔄 Refresh</button>
+              <button onclick="scrollToBottom()">⬇️ Bottom</button>
+              <button onclick="clearLogs()">🗑️ Clear File</button>
+              <span id="liveIndicator" style="color: #4ec9b0; font-size: 11px; margin-left: 10px;">🟢 Live</span>
+            </div>
+            <div class="stats">
+              Showing ${displayLines.length.toLocaleString()} of ${lines.length.toLocaleString()} lines
+              ${level ? `(filtered by ${level})` : ''}
+            </div>
+          </div>
+          <div class="logs-container" id="logsContainer">
+            ${displayLines.length > 0 ? coloredLogs : '<div class="no-logs">No logs yet. Logs will appear here as the server runs.</div>'}
+          </div>
+          <script>
+            function updateFilter() {
+              const level = document.getElementById('levelFilter').value;
+              const limit = document.getElementById('limitInput').value;
+              const url = new URL(window.location.href);
+              if (level) url.searchParams.set('level', level);
+              else url.searchParams.delete('level');
+              url.searchParams.set('limit', limit);
+              window.location.href = url.toString();
+            }
+
+            function scrollToBottom() {
+              window.scrollTo(0, document.body.scrollHeight);
+            }
+
+            function clearLogs() {
+              if (confirm('Are you sure you want to clear all logs? This cannot be undone.')) {
+                fetch('/logs/clear', { method: 'POST' })
+                  .then(res => res.json())
+                  .then(data => {
+                    alert(data.message);
+                    location.reload();
+                  })
+                  .catch(err => alert('Error clearing logs: ' + err.message));
+              }
+            }
+
+            // Auto-scroll to bottom on load
+            setTimeout(scrollToBottom, 100);
+
+            // Real-time log streaming via SSE
+            const eventSource = new EventSource('/logs/stream');
+            const container = document.getElementById('logsContainer');
+            const liveIndicator = document.getElementById('liveIndicator');
+
+            eventSource.onmessage = function(event) {
+              const log = JSON.parse(event.data);
+
+              // Create log line
+              const logDiv = document.createElement('div');
+              logDiv.className = 'log-line';
+
+              if (log.level === 'ERROR') {
+                logDiv.classList.add('error');
+              } else if (log.level === 'WARN') {
+                logDiv.classList.add('warn');
+              } else if (log.level === 'DEBUG') {
+                logDiv.classList.add('debug');
+              } else {
+                logDiv.classList.add('info');
+              }
+
+              const logText = \`[\${log.timestamp}] [\${log.level}] \${log.message}\`;
+              logDiv.textContent = logText;
+
+              // Check if we should filter this log
+              const levelFilter = new URLSearchParams(window.location.search).get('level');
+              if (!levelFilter || log.level === levelFilter) {
+                container.appendChild(logDiv);
+
+                // Auto-scroll if near bottom
+                const scrolledToBottom = (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 100;
+                if (scrolledToBottom) {
+                  scrollToBottom();
+                }
+              }
+            };
+
+            eventSource.onerror = function(err) {
+              console.error('SSE Error:', err);
+              liveIndicator.textContent = '🔴 Disconnected';
+              liveIndicator.style.color = '#c5534b';
+              // Reconnection is automatic
+            };
+
+            eventSource.onopen = function() {
+              liveIndicator.textContent = '🟢 Live';
+              liveIndicator.style.color = '#4ec9b0';
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+/**
+ * Clear logs endpoint
+ */
+app.post('/logs/clear', (req, res) => {
+  fs.writeFile(LOG_FILE, '', (err) => {
+    if (err) {
+      logger.error('Failed to clear logs:', err.message);
+      return res.status(500).json({ error: 'Failed to clear logs', message: err.message });
+    }
+    logger.info('Logs cleared by user');
+    res.json({ message: 'Logs cleared successfully' });
+  });
+});
+
+/**
+ * Transcript/Caption History endpoint - view and export all captions
+ */
+app.get('/transcript', (req, res) => {
+  const format = req.query.format || 'html'; // html, txt, csv, json
+  const limit = parseInt(req.query.limit) || 1000;
+
+  // Read from file for complete history
+  fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
+    if (err && err.code !== 'ENOENT') {
+      return res.status(500).json({ error: 'Failed to read captions', message: err.message });
+    }
+
+    let captions = [];
+
+    // Parse file data
+    if (data) {
+      const lines = data.split('\n').filter(line => line.trim());
+      captions = lines.map(line => {
+        const parts = line.split('\t');
+        return {
+          timestamp: parts[0],
+          text: parts.slice(1).join('\t') // Handle text with tabs
+        };
+      });
+    }
+
+    // Get last N captions
+    const displayCaptions = captions.slice(-limit);
+
+    // Export formats
+    if (format === 'json') {
+      return res.json({ captions: displayCaptions, total: captions.length });
+    }
+
+    if (format === 'csv') {
+      const includeTimestamp = req.query.timestamp !== 'false';
+      let csv;
+      if (includeTimestamp) {
+        csv = 'Timestamp,Caption\n' + displayCaptions.map(c =>
+          `"${c.timestamp}","${c.text.replace(/"/g, '""')}"`
+        ).join('\n');
+      } else {
+        csv = 'Caption\n' + displayCaptions.map(c =>
+          `"${c.text.replace(/"/g, '""')}"`
+        ).join('\n');
+      }
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.csv"`);
+      return res.send(csv);
+    }
+
+    if (format === 'txt') {
+      const includeTimestamp = req.query.timestamp !== 'false';
+      let txt;
+      if (includeTimestamp) {
+        txt = displayCaptions.map(c =>
+          `[${new Date(c.timestamp).toLocaleString()}] ${c.text}`
+        ).join('\n\n');
+      } else {
+        txt = displayCaptions.map(c => c.text).join('\n\n');
+      }
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="transcript-${new Date().toISOString().split('T')[0]}.txt"`);
+      return res.send(txt);
+    }
+
+    // HTML view (default)
+    const captionHTML = displayCaptions.length > 0
+      ? displayCaptions.map(c => {
+          const time = new Date(c.timestamp).toLocaleTimeString();
+          const date = new Date(c.timestamp).toLocaleDateString();
+          return `
+            <div class="caption-item">
+              <div class="caption-time">
+                <span class="date">${date}</span>
+                <span class="time">${time}</span>
+              </div>
+              <div class="caption-text">${escapeHtml(c.text)}</div>
+            </div>
+          `;
+        }).join('')
+      : '<div class="no-captions">No captions yet. Captions will appear here as they are spoken.</div>';
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Caption Transcript</title>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+              font-family: 'Courier New', monospace;
+              background: #1e1e1e;
+              color: #d4d4d4;
+              padding: 20px;
+              font-size: 13px;
+              line-height: 1.4;
+            }
+            .header {
+              position: sticky;
+              top: 0;
+              background: #2d2d30;
+              padding: 15px;
+              margin: -20px -20px 20px -20px;
+              border-bottom: 2px solid #3e3e42;
+              z-index: 100;
+            }
+            h1 {
+              color: #4ec9b0;
+              margin-bottom: 10px;
+              font-size: 20px;
+            }
+            .controls {
+              display: flex;
+              gap: 10px;
+              flex-wrap: wrap;
+              align-items: center;
+            }
+            .controls button, .controls a {
+              background: #0e639c;
+              color: white;
+              border: none;
+              padding: 6px 12px;
+              border-radius: 3px;
+              cursor: pointer;
+              text-decoration: none;
+              font-family: inherit;
+              font-size: 12px;
+            }
+            .controls button:hover, .controls a:hover {
+              background: #1177bb;
+            }
+            .controls .danger {
+              background: #c5534b;
+            }
+            .controls .danger:hover {
+              background: #d16b64;
+            }
+            .stats {
+              color: #858585;
+              margin-top: 10px;
+              font-size: 11px;
+            }
+            .content {
+              background: #252526;
+              border: 1px solid #3e3e42;
+              border-radius: 4px;
+              padding: 15px;
+            }
+            .caption-item {
+              padding: 12px;
+              border-left: 3px solid #4ec9b0;
+              margin-bottom: 12px;
+              background: #2d2d30;
+              border-radius: 3px;
+              transition: all 0.2s;
+            }
+            .caption-item:hover {
+              background: #333337;
+              border-left-color: #5fd4c3;
+            }
+            .caption-time {
+              color: #858585;
+              font-size: 11px;
+              margin-bottom: 6px;
+              font-weight: 500;
+            }
+            .caption-time .date {
+              margin-right: 8px;
+              color: #6a6a6a;
+            }
+            .caption-time .time {
+              color: #9cdcfe;
+              font-weight: 600;
+            }
+            .caption-text {
+              color: #d4d4d4;
+              font-size: 14px;
+              line-height: 1.6;
+            }
+            .no-captions {
+              color: #858585;
+              text-align: center;
+              padding: 60px 20px;
+              font-style: italic;
+              font-size: 13px;
+            }
+            @media (max-width: 768px) {
+              body { padding: 10px; font-size: 11px; }
+              .header { margin: -10px -10px 10px -10px; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>📝 Caption Transcript</h1>
+            <div class="controls">
+              <select id="exportFormat" style="background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; padding: 5px 10px; border-radius: 3px; font-family: inherit; font-size: 12px;">
+                <option value="">📥 Export...</option>
+                <option value="txt-with">TXT (with timestamps)</option>
+                <option value="txt-without">TXT (no timestamps)</option>
+                <option value="csv-with">CSV (with timestamps)</option>
+                <option value="csv-without">CSV (no timestamps)</option>
+                <option value="json">JSON</option>
+              </select>
+              <button onclick="location.reload()">🔄 Refresh</button>
+              <button onclick="scrollToBottom()">⬇️ Latest</button>
+              <button class="danger" onclick="clearCaptions()">🗑️ Clear All</button>
+            </div>
+            <div class="stats">
+              Showing ${displayCaptions.length.toLocaleString()} of ${captions.length.toLocaleString()} captions
+            </div>
+          </div>
+          <div class="content" id="captionsContainer">
+            ${captionHTML}
+          </div>
+          <script>
+            // Handle export dropdown
+            document.getElementById('exportFormat').addEventListener('change', function(e) {
+              const value = e.target.value;
+              if (!value) return;
+
+              let url;
+              switch(value) {
+                case 'txt-with':
+                  url = '/transcript?format=txt&timestamp=true';
+                  break;
+                case 'txt-without':
+                  url = '/transcript?format=txt&timestamp=false';
+                  break;
+                case 'csv-with':
+                  url = '/transcript?format=csv&timestamp=true';
+                  break;
+                case 'csv-without':
+                  url = '/transcript?format=csv&timestamp=false';
+                  break;
+                case 'json':
+                  url = '/transcript?format=json';
+                  break;
+              }
+
+              if (url) {
+                window.location.href = url;
+              }
+
+              // Reset dropdown
+              setTimeout(() => e.target.value = '', 100);
+            });
+
+            function scrollToBottom() {
+              window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            }
+
+            function clearCaptions() {
+              if (confirm('Are you sure you want to clear all captions? This will delete the entire caption history and cannot be undone.')) {
+                fetch('/transcript/clear', { method: 'POST' })
+                  .then(res => res.json())
+                  .then(data => {
+                    alert(data.message);
+                    location.reload();
+                  })
+                  .catch(err => alert('Error clearing captions: ' + err.message));
+              }
+            }
+
+            // Auto-scroll to bottom on load
+            setTimeout(scrollToBottom, 100);
+
+            // Real-time updates via Server-Sent Events
+            const eventSource = new EventSource('/transcript/stream');
+
+            eventSource.onmessage = function(event) {
+              const caption = JSON.parse(event.data);
+              const container = document.getElementById('captionsContainer');
+
+              // Remove "no captions" message if present
+              const noCaptions = container.querySelector('.no-captions');
+              if (noCaptions) {
+                noCaptions.remove();
+              }
+
+              // Create new caption element
+              const time = new Date(caption.timestamp).toLocaleTimeString();
+              const date = new Date(caption.timestamp).toLocaleDateString();
+
+              const captionDiv = document.createElement('div');
+              captionDiv.className = 'caption-item';
+              captionDiv.innerHTML = \`
+                <div class="caption-time">
+                  <span class="date">\${date}</span>
+                  <span class="time">\${time}</span>
+                </div>
+                <div class="caption-text">\${caption.text}</div>
+              \`;
+
+              container.appendChild(captionDiv);
+
+              // Auto-scroll to new caption
+              scrollToBottom();
+
+              // Update stats
+              const stats = document.querySelector('.stats');
+              const match = stats.textContent.match(/Showing ([\\d,]+) of ([\\d,]+)/);
+              if (match) {
+                const newTotal = parseInt(match[2].replace(/,/g, '')) + 1;
+                const newShowing = parseInt(match[1].replace(/,/g, '')) + 1;
+                stats.textContent = \`Showing \${newShowing.toLocaleString()} of \${newTotal.toLocaleString()} captions\`;
+              }
+            };
+
+            eventSource.onerror = function(err) {
+              console.error('SSE Error:', err);
+              // Reconnection is automatic
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+/**
+ * Clear captions endpoint
+ */
+app.post('/transcript/clear', (req, res) => {
+  fs.writeFile(CAPTIONS_LOG_FILE, '', (err) => {
+    if (err) {
+      logger.error('Failed to clear captions:', err.message);
+      return res.status(500).json({ error: 'Failed to clear captions', message: err.message });
+    }
+    // Also clear in-memory history
+    captionHistory.length = 0;
+    logger.info('Captions cleared by user');
+    res.json({ message: 'All captions cleared successfully' });
+  });
+});
+
+/**
+ * SSE endpoint for real-time transcript updates
+ */
+app.get('/transcript/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  // Add client to set
+  transcriptSSEClients.add(res);
+
+  // Send initial heartbeat
+  res.write(': heartbeat\n\n');
+
+  // Keep connection alive with periodic heartbeats
+  const heartbeat = setInterval(() => {
+    res.write(': heartbeat\n\n');
+  }, 30000);
+
+  // Clean up on close
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    transcriptSSEClients.delete(res);
+  });
+});
+
+/**
+ * SSE endpoint for real-time log streaming
+ */
+app.get('/logs/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  // Add client to set
+  logsSSEClients.add(res);
+
+  // Send initial heartbeat
+  res.write(': heartbeat\n\n');
+
+  // Keep connection alive with periodic heartbeats
+  const heartbeat = setInterval(() => {
+    res.write(': heartbeat\n\n');
+  }, 30000);
+
+  // Clean up on close
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    logsSSEClients.delete(res);
+  });
+});
+
+/**
  * Serve static files (if needed)
  */
 app.use(express.static(__dirname));
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  return text.replace(/[&<>"']/g, m => map[m]);
+}
 
 /**
  * Upgrade HTTP to WebSocket
@@ -478,6 +1282,7 @@ function connectToSoniox() {
             
             // Send to YouTube (only final results)
             if (isFinal) {
+              logCaption(translatedText, true); // Log final caption to history
               youtubePublisher.publish(translatedText).catch(err => {
                 // Error already logged in publish method
               });
@@ -501,6 +1306,7 @@ function connectToSoniox() {
             
             // Send to YouTube (only final results)
             if (isFinal) {
+              logCaption(translatedText, true); // Log final caption to history
               youtubePublisher.publish(translatedText).catch(err => {
                 // Error already logged in publish method
               });
@@ -617,13 +1423,13 @@ function stopHeartbeat() {
  */
 function gracefulShutdown() {
   console.log('\n🛑 Shutting down gracefully...');
-  
+
   // Close Soniox connection
   if (sonioxWs) {
     stopHeartbeat();
     sonioxWs.close();
   }
-  
+
   // Close all client connections
   wssClients.clients.forEach(client => {
     client.close();
@@ -631,13 +1437,21 @@ function gracefulShutdown() {
   wssCaptions.clients.forEach(client => {
     client.close();
   });
-  
+
+  // Close log streams
+  logStream.end(() => {
+    console.log('📝 Log file closed');
+  });
+  captionsStream.end(() => {
+    console.log('📝 Captions file closed');
+  });
+
   // Close server
   server.close(() => {
     console.log('✅ Server closed');
     process.exit(0);
   });
-  
+
   // Force exit after 10 seconds
   setTimeout(() => {
     console.error('⚠️ Forced shutdown');
@@ -669,6 +1483,8 @@ server.listen(PORT, () => {
   console.log(`📡 Client endpoint: ws://localhost:${PORT}/client`);
   console.log(`📺 Caption endpoint: ws://localhost:${PORT}/captions`);
   console.log(`🌐 Open http://localhost:${PORT} in Resolume Browser Source`);
+  console.log(`📊 Server logs: http://localhost:${PORT}/logs`);
+  console.log(`📝 Caption transcript: http://localhost:${PORT}/transcript`);
   console.log(`⏱️  Optimized for long-running sessions (3+ hours)`);
 });
 

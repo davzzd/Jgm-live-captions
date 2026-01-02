@@ -4,12 +4,15 @@ A localhost web application that displays live translated subtitles for Resolume
 
 ## Features
 
-- 🎤 **Microphone Input**: Captures audio from your microphone
+- 🎤 **Dual Audio Input**: Capture from microphone OR browser tab/system audio
 - 🌐 **Live Translation**: Real-time Malayalam → English translation via Soniox
 - 📺 **Resolume Ready**: Transparent HTML output perfect for Browser Source
 - 🎨 **Broadcast Safe**: Centered, bottom-aligned subtitles with proper styling
 - ⚡ **Real-time**: Only displays final captions (no partials)
 - 🔄 **Auto-reconnect**: Handles connection drops gracefully
+- 📊 **Live Logging**: Real-time server logs viewable in browser
+- 📝 **Transcript Export**: Save caption history as TXT, CSV, or JSON
+- ⏱️ **Real-time Updates**: SSE-based live streaming for logs and transcripts
 
 ## Architecture
 
@@ -114,14 +117,25 @@ Open `http://localhost:8080` in a browser (or use this URL in Resolume Browser S
 
 This will show the transparent subtitle display that Resolume will capture.
 
-### Step 2: Start Microphone Input
+### Step 2: Start Audio Input
 
 Open `http://localhost:8080/client.html` in a separate browser window/tab.
 
-1. Click "Start Recording"
-2. Grant microphone permissions
-3. Speak in Malayalam
-4. Translated English subtitles will appear in the caption display
+#### Option A: Microphone Mode
+1. Select "🎤 Microphone" from the Audio Source dropdown
+2. Choose your microphone device
+3. Click "Start Recording"
+4. Grant microphone permissions
+5. Speak in Malayalam
+
+#### Option B: Tab/System Audio Mode
+1. Select "🖥️ Tab/System Audio (Screen Share)" from the dropdown
+2. Click "Start Recording"
+3. Browser will ask to share a screen/tab:
+   - Select the Chrome Tab with your audio source (e.g., YouTube)
+   - **IMPORTANT**: Check the "Share audio" checkbox
+   - Click "Share"
+4. Play your audio - it will be transcribed in real-time
 
 ### Step 3: Add to Resolume
 
@@ -130,14 +144,36 @@ Open `http://localhost:8080/client.html` in a separate browser window/tab.
 3. Enable **Transparent Background** (if available)
 4. The subtitles will appear as an NDI RGBA stream with alpha channel
 
+### Additional Features
+
+#### View Live Server Logs
+Open `http://localhost:8080/logs` to view:
+- Real-time server activity
+- Connection status
+- Translation processing
+- Errors and warnings
+- Filter by log level (INFO, ERROR, WARN, DEBUG)
+- Live updates via Server-Sent Events (no refresh needed)
+
+#### View & Export Caption Transcript
+Open `http://localhost:8080/transcript` to:
+- View all captions with timestamps
+- Export as TXT (with or without timestamps)
+- Export as CSV (with or without timestamps)
+- Export as JSON
+- Real-time caption updates
+- Clear caption history
+
 ## File Structure
 
 ```
 captions-app/
 ├── captions.html      # Subtitle display (for Resolume)
-├── client.html        # Microphone input interface
-├── ws-server.js       # WebSocket server
+├── client.html        # Audio input interface (mic or tab audio)
+├── ws-server.js       # WebSocket server with logging & transcript
 ├── package.json       # Dependencies
+├── server.log         # Server activity logs (auto-generated)
+├── captions.log       # Caption transcript (auto-generated)
 └── README.md          # This file
 ```
 
@@ -155,10 +191,25 @@ The subtitle display is optimized for broadcast:
 
 ## Technical Details
 
+### HTTP Endpoints
+
+- `http://localhost:8080/` - Caption display (for Resolume)
+- `http://localhost:8080/client.html` - Audio input control panel
+- `http://localhost:8080/logs` - Live server logs viewer
+- `http://localhost:8080/transcript` - Caption transcript & export
+- `http://localhost:8080/transcript?format=txt&timestamp=false` - Export TXT (no timestamps)
+- `http://localhost:8080/transcript?format=csv&timestamp=true` - Export CSV (with timestamps)
+- `http://localhost:8080/transcript?format=json` - Export JSON
+
 ### WebSocket Endpoints
 
-- `ws://localhost:8080/client` - Browser clients (mic input)
+- `ws://localhost:8080/client` - Browser clients (audio input)
 - `ws://localhost:8080/captions` - Caption displays
+
+### SSE Endpoints (Server-Sent Events)
+
+- `http://localhost:8080/logs/stream` - Real-time log streaming
+- `http://localhost:8080/transcript/stream` - Real-time caption streaming
 
 ### Audio Format
 
@@ -184,9 +235,16 @@ The subtitle display is optimized for broadcast:
 
 ### Audio Not Capturing
 
+**Microphone Mode:**
 1. Grant microphone permissions in browser
 2. Check browser console for errors
 3. Verify microphone is working in other applications
+
+**Tab Audio Mode:**
+1. Make sure to check "Share audio" when selecting the tab
+2. Some tabs may not support audio capture (security restrictions)
+3. Try selecting "Entire Screen" instead of "Chrome Tab"
+4. Check browser console for errors
 
 ### Resolume Not Showing Transparent Background
 
@@ -194,12 +252,28 @@ The subtitle display is optimized for broadcast:
 2. Check that `background: transparent` is set in captions.html
 3. Verify Resolume is using the correct URL
 
+## Export Formats
+
+### TXT Export
+- **With timestamps**: `[1/2/2026, 12:34:56 PM] Caption text`
+- **Without timestamps**: `Caption text` only
+
+### CSV Export
+- **With timestamps**: Two columns (Timestamp, Caption)
+- **Without timestamps**: One column (Caption)
+
+### JSON Export
+- Full data including timestamps and metadata
+- Useful for programmatic access
+
 ## Notes
 
 - This app is designed for **localhost use only**
 - The caption display has no UI controls (as per Resolume requirements)
 - Only **final** captions are displayed (partial results are ignored)
 - The server handles reconnection automatically
+- Log files (`server.log`, `captions.log`) persist between restarts
+- Real-time updates use Server-Sent Events (SSE) - no polling required
 
 ## License
 
