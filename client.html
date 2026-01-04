@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live Translation - Microphone Input</title>
+  <title>JGM Live Translation - Home</title>
   <style>
     * {
       margin: 0;
@@ -636,6 +636,28 @@
     <div class="container">
       <h1>JGM Live Translation</h1>
       <p class="subtitle">Malayalam → English Real-time Translation</p>
+      
+      <!-- Navigation Buttons -->
+      <div class="nav-buttons" style="display: flex; gap: 10px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap;">
+        <a href="/captions" target="_blank" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease;">
+          📺 Caption Display
+        </a>
+        <a href="/transcript" target="_blank" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease;">
+          📝 Transcript
+        </a>
+        <a href="/logs" target="_blank" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease;">
+          📊 Server Logs
+        </a>
+      </div>
+      
+      <style>
+        .nav-btn:hover {
+          background: rgba(92, 131, 116, 0.5) !important;
+          border-color: #93B1A6 !important;
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(92, 131, 116, 0.3);
+        }
+      </style>
 
       <div class="status-card">
         <div class="status-indicator">

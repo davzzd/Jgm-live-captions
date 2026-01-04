@@ -522,9 +522,16 @@ function broadcastToCaptions(text) {
 }
 
 /**
- * Serve the captions.html file
+ * Serve the client.html file as default homepage
  */
 app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/client.html');
+});
+
+/**
+ * Serve the captions.html file
+ */
+app.get('/captions', (req, res) => {
   res.sendFile(__dirname + '/captions.html');
 });
 
