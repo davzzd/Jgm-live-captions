@@ -141,6 +141,9 @@ logger.info('===== Server starting =====');
 const app = express();
 const server = http.createServer(app);
 
+// Middleware
+app.use(express.json()); // Parse JSON request bodies
+
 // WebSocket server for browser clients (mic input)
 const wssClients = new WebSocket.Server({ 
   noServer: true,
@@ -846,19 +849,37 @@ app.get('/transcript', (req, res) => {
 
     // Get captions to display (all if limit is 0, otherwise last N)
     const displayCaptions = limit > 0 ? captions.slice(-limit) : captions;
+    
+    // Get time offset from query parameter (if provided from frontend)
+    const timeOffset = parseInt(req.query.offset) || 0;
 
     // Export formats
     if (format === 'json') {
-      return res.json({ captions: displayCaptions, total: captions.length });
+      // Apply time offset to timestamps if provided
+      const exportCaptions = timeOffset !== 0 
+        ? displayCaptions.map(c => ({
+            timestamp: new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString(),
+            originalTimestamp: c.timestamp,
+            text: c.text
+          }))
+        : displayCaptions;
+      return res.json({ 
+        captions: exportCaptions, 
+        total: captions.length,
+        timeOffset: timeOffset !== 0 ? timeOffset : undefined
+      });
     }
 
     if (format === 'csv') {
       const includeTimestamp = req.query.timestamp !== 'false';
       let csv;
       if (includeTimestamp) {
-        csv = 'Timestamp,Caption\n' + displayCaptions.map(c =>
-          `"${c.timestamp}","${c.text.replace(/"/g, '""')}"`
-        ).join('\n');
+        csv = 'Timestamp,Caption\n' + displayCaptions.map(c => {
+          const timestamp = timeOffset !== 0 
+            ? new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString()
+            : c.timestamp;
+          return `"${timestamp}","${c.text.replace(/"/g, '""')}"`;
+        }).join('\n');
       } else {
         csv = 'Caption\n' + displayCaptions.map(c =>
           `"${c.text.replace(/"/g, '""')}"`
@@ -873,9 +894,12 @@ app.get('/transcript', (req, res) => {
       const includeTimestamp = req.query.timestamp !== 'false';
       let txt;
       if (includeTimestamp) {
-        txt = displayCaptions.map(c =>
-          `[${new Date(c.timestamp).toLocaleString()}] ${c.text}`
-        ).join('\n\n');
+        txt = displayCaptions.map(c => {
+          const date = timeOffset !== 0
+            ? new Date(new Date(c.timestamp).getTime() + timeOffset)
+            : new Date(c.timestamp);
+          return `[${date.toLocaleString()}] ${c.text}`;
+        }).join('\n\n');
       } else {
         txt = displayCaptions.map(c => c.text).join('\n\n');
       }
@@ -894,8 +918,14 @@ app.get('/transcript', (req, res) => {
         return res.send('');
       }
       
+      // Get time offset from query parameter (if provided from frontend)
+      const timeOffset = parseInt(req.query.offset) || 0;
+      
       // Helper function to convert milliseconds to SRT time format (HH:MM:SS,mmm)
       function toSRTTime(totalMs) {
+        // Ensure non-negative
+        totalMs = Math.max(0, totalMs);
+        
         const hours = Math.floor(totalMs / 3600000);
         const minutes = Math.floor((totalMs % 3600000) / 60000);
         const seconds = Math.floor((totalMs % 60000) / 1000);
@@ -904,8 +934,21 @@ app.get('/transcript', (req, res) => {
         return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
       }
       
-      // Calculate relative times from first caption (SRT standard)
-      const firstCaptionTime = new Date(displayCaptions[0].timestamp).getTime();
+      // Get first caption's adjusted timestamp
+      const firstCaptionOriginalTime = new Date(displayCaptions[0].timestamp).getTime();
+      const firstCaptionAdjustedTime = firstCaptionOriginalTime + timeOffset;
+      
+      // Parse the start time from the query parameter if provided (format: HH:MM:SS)
+      // This is the relative start time the user set (e.g., "00:05:30")
+      let startTimeMs = 0; // Default to 00:00:00
+      if (req.query.startTime) {
+        const timeParts = req.query.startTime.split(':');
+        const hours = parseInt(timeParts[0]) || 0;
+        const minutes = parseInt(timeParts[1]) || 0;
+        const seconds = parseInt(timeParts[2]) || 0;
+        startTimeMs = (hours * 3600000) + (minutes * 60000) + (seconds * 1000);
+      }
+      
       const defaultDuration = 3000; // 3 seconds in milliseconds
       const maxDuration = 8000; // Max 8 seconds per caption
       const minDuration = 1000; // Min 1 second per caption
@@ -915,23 +958,28 @@ app.get('/transcript', (req, res) => {
       
       for (let i = 0; i < displayCaptions.length; i++) {
         const caption = displayCaptions[i];
-        const currentTime = new Date(caption.timestamp).getTime();
-        const relativeStart = currentTime - firstCaptionTime;
+        // Apply time offset to get adjusted timestamp
+        const captionOriginalTime = new Date(caption.timestamp).getTime();
+        const captionAdjustedTime = captionOriginalTime + timeOffset;
+        
+        // Calculate relative time from first caption (in milliseconds)
+        const relativeStart = captionAdjustedTime - firstCaptionAdjustedTime;
         
         // Calculate end time
         let relativeEnd;
         if (i < displayCaptions.length - 1) {
-          const nextTime = new Date(displayCaptions[i + 1].timestamp).getTime();
-          const duration = Math.min(nextTime - currentTime, maxDuration);
+          const nextOriginalTime = new Date(displayCaptions[i + 1].timestamp).getTime();
+          const nextAdjustedTime = nextOriginalTime + timeOffset;
+          const duration = Math.min(nextAdjustedTime - captionAdjustedTime, maxDuration);
           relativeEnd = relativeStart + Math.max(duration, minDuration);
         } else {
           // Last caption: use default duration
           relativeEnd = relativeStart + defaultDuration;
         }
         
-        // Format SRT entry
-        const startSRT = toSRTTime(relativeStart);
-        const endSRT = toSRTTime(relativeEnd);
+        // Format SRT entry - start from the user's set start time, then add relative offset
+        const startSRT = toSRTTime(startTimeMs + relativeStart);
+        const endSRT = toSRTTime(startTimeMs + relativeEnd);
         
         // Clean caption text (remove control characters, preserve line breaks if needed)
         const cleanText = caption.text
@@ -954,16 +1002,19 @@ app.get('/transcript', (req, res) => {
 
     // HTML view (default)
     const captionHTML = displayCaptions.length > 0
-      ? displayCaptions.map(c => {
+      ? displayCaptions.map((c, index) => {
           const time = new Date(c.timestamp).toLocaleTimeString();
           const date = new Date(c.timestamp).toLocaleDateString();
           return `
-            <div class="caption-item">
-              <div class="caption-time">
-                <span class="date">${date}</span>
-                <span class="time">${time}</span>
+            <div class="caption-item" data-timestamp="${c.timestamp}" data-index="${index}">
+              <div class="caption-header">
+                <div class="caption-time">
+                  <span class="date">${date}</span>
+                  <span class="time">${time}</span>
+                </div>
+                <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
               </div>
-              <div class="caption-text">${escapeHtml(c.text)}</div>
+              <div class="caption-text" data-original="${escapeHtml(c.text).replace(/"/g, '&quot;')}">${escapeHtml(c.text)}</div>
             </div>
           `;
         }).join('')
@@ -1031,6 +1082,59 @@ app.get('/transcript', (req, res) => {
               margin-top: 10px;
               font-size: 11px;
             }
+            .time-adjustment {
+              margin-top: 10px;
+              padding: 10px;
+              background: #1e1e1e;
+              border: 1px solid #3e3e42;
+              border-radius: 3px;
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              flex-wrap: wrap;
+            }
+            .time-adjustment label {
+              color: #9cdcfe;
+              font-size: 12px;
+              font-weight: 600;
+            }
+            .time-adjustment input {
+              background: #3c3c3c;
+              color: #d4d4d4;
+              border: 1px solid #555;
+              padding: 5px 10px;
+              border-radius: 3px;
+              font-family: inherit;
+              font-size: 12px;
+            }
+            .time-adjustment button {
+              background: #0e639c;
+              color: white;
+              border: none;
+              padding: 5px 12px;
+              border-radius: 3px;
+              cursor: pointer;
+              font-size: 11px;
+              font-weight: 600;
+            }
+            .time-adjustment button:hover {
+              background: #1177bb;
+            }
+            .time-adjustment button.reset {
+              background: #c5534b;
+            }
+            .time-adjustment button.reset:hover {
+              background: #d16b64;
+            }
+            .time-offset-indicator {
+              color: #dcdcaa;
+              font-size: 11px;
+              font-weight: 600;
+              display: none;
+            }
+            .time-offset-indicator.active {
+              display: inline;
+            }
             .content {
               background: #252526;
               border: 1px solid #3e3e42;
@@ -1044,15 +1148,28 @@ app.get('/transcript', (req, res) => {
               background: #2d2d30;
               border-radius: 3px;
               transition: all 0.2s;
+              position: relative;
             }
             .caption-item:hover {
               background: #333337;
               border-left-color: #5fd4c3;
             }
+            .caption-item.editing {
+              border-left-color: #dcdcaa;
+              background: #3a3a3d;
+            }
+            .caption-item.edited {
+              border-left-color: #dcdcaa;
+            }
+            .caption-header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              margin-bottom: 6px;
+            }
             .caption-time {
               color: #858585;
               font-size: 11px;
-              margin-bottom: 6px;
               font-weight: 500;
             }
             .caption-time .date {
@@ -1063,10 +1180,78 @@ app.get('/transcript', (req, res) => {
               color: #9cdcfe;
               font-weight: 600;
             }
+            .edit-btn {
+              background: transparent;
+              border: 1px solid transparent;
+              color: #858585;
+              cursor: pointer;
+              padding: 4px 8px;
+              border-radius: 3px;
+              font-size: 12px;
+              opacity: 0;
+              transition: all 0.2s;
+            }
+            .caption-item:hover .edit-btn {
+              opacity: 1;
+            }
+            .edit-btn:hover {
+              background: #3e3e42;
+              border-color: #4ec9b0;
+              color: #4ec9b0;
+            }
             .caption-text {
               color: #d4d4d4;
               font-size: 14px;
               line-height: 1.6;
+              min-height: 20px;
+            }
+            .caption-text[contenteditable="true"] {
+              background: #1e1e1e;
+              padding: 8px;
+              border: 1px solid #4ec9b0;
+              border-radius: 3px;
+              outline: none;
+            }
+            .caption-text[contenteditable="true"]:focus {
+              border-color: #5fd4c3;
+              box-shadow: 0 0 0 2px rgba(78, 201, 176, 0.2);
+            }
+            .edit-actions {
+              display: flex;
+              gap: 8px;
+              margin-top: 8px;
+              justify-content: flex-end;
+            }
+            .edit-actions button {
+              padding: 6px 12px;
+              border: none;
+              border-radius: 3px;
+              cursor: pointer;
+              font-size: 12px;
+              font-family: inherit;
+              transition: all 0.2s;
+            }
+            .save-btn {
+              background: #4ec9b0;
+              color: #1e1e1e;
+              font-weight: 600;
+            }
+            .save-btn:hover {
+              background: #5fd4c3;
+            }
+            .cancel-btn {
+              background: #3e3e42;
+              color: #d4d4d4;
+            }
+            .cancel-btn:hover {
+              background: #4a4a4f;
+            }
+            .edited-indicator {
+              display: inline-block;
+              margin-left: 8px;
+              color: #dcdcaa;
+              font-size: 10px;
+              font-weight: 600;
             }
             .no-captions {
               color: #858585;
@@ -1102,12 +1287,201 @@ app.get('/transcript', (req, res) => {
               Showing ${displayCaptions.length.toLocaleString()} of ${captions.length.toLocaleString()} captions
               ${limit > 0 ? `(limited to last ${limit})` : '(showing all)'}
               ${captions.length > 10000 ? '<br><span style="color: #dcdcaa;">⚠️ Large file detected. Consider using ?limit=N to view recent captions only.</span>' : ''}
+              <span class="time-offset-indicator" id="timeOffsetIndicator"></span>
+            </div>
+            <div class="time-adjustment">
+              <label for="startTime">⏰ Adjust Start Time:</label>
+              <input type="time" id="startTime" step="1" title="Set start time in 24-hour format (e.g., 00:00:00 for video start, 01:23:45 for 1h 23m 45s into video)" placeholder="HH:MM:SS">
+              <button onclick="applyTimeOffset()">Apply</button>
+              <button class="reset" onclick="resetTimeOffset()">Reset to Actual</button>
+              <span style="font-size: 11px; color: #858585; margin-left: 10px;">
+                💡 Use 24-hour format (00:00:00 to 23:59:59) - perfect for video timecodes
+              </span>
             </div>
           </div>
           <div class="content" id="captionsContainer">
             ${captionHTML}
           </div>
           <script>
+            // Time adjustment state
+            let timeOffsetMs = parseInt(localStorage.getItem('transcriptTimeOffset')) || 0;
+            let startTimeValue = localStorage.getItem('transcriptStartTime') || ''; // Store the start time string (e.g., "00:05:30")
+            let firstCaptionTimestamp = null;
+
+            // Smart autoscroll state
+            let isUserScrolling = false;
+            let autoScrollEnabled = true;
+            let scrollTimeout;
+
+            // Initialize time offset on load
+            function initTimeOffset() {
+              // Get first caption timestamp
+              const firstCaption = document.querySelector('.caption-item');
+              if (firstCaption) {
+                firstCaptionTimestamp = firstCaption.getAttribute('data-timestamp');
+                
+                // Load start time from localStorage if available
+                const savedStartTime = localStorage.getItem('transcriptStartTime');
+                if (savedStartTime) {
+                  startTimeValue = savedStartTime;
+                  document.getElementById('startTime').value = savedStartTime;
+                }
+                
+                // If offset exists, apply it and update indicator
+                if (timeOffsetMs !== 0) {
+                  updateTimeOffsetIndicator();
+                  applyStoredOffset();
+                }
+              }
+            }
+
+            // Apply time offset
+            function applyTimeOffset() {
+              const startTimeInput = document.getElementById('startTime').value;
+              if (!startTimeInput) {
+                alert('Please select a start time');
+                return;
+              }
+
+              if (!firstCaptionTimestamp) {
+                alert('No captions available');
+                return;
+              }
+
+              // Parse the input time (HH:MM:SS)
+              const [hours, minutes, seconds] = startTimeInput.split(':').map(Number);
+              
+              // Create target time using today's date
+              const targetDate = new Date();
+              targetDate.setHours(hours, minutes, seconds || 0, 0);
+              const targetMs = targetDate.getTime();
+
+              // Get first caption's actual timestamp
+              const firstCaptionDate = new Date(firstCaptionTimestamp);
+              const firstCaptionMs = firstCaptionDate.getTime();
+
+              // Calculate offset
+              timeOffsetMs = targetMs - firstCaptionMs;
+
+              // Save to localStorage
+              localStorage.setItem('transcriptTimeOffset', timeOffsetMs);
+              localStorage.setItem('transcriptStartTime', startTimeInput); // Store the start time string
+
+              // Store start time value
+              startTimeValue = startTimeInput;
+
+              // Apply to all captions
+              applyOffsetToAllCaptions();
+              updateTimeOffsetIndicator();
+            }
+
+            // Reset time offset
+            function resetTimeOffset() {
+              timeOffsetMs = 0;
+              startTimeValue = '';
+              localStorage.removeItem('transcriptTimeOffset');
+              localStorage.removeItem('transcriptStartTime');
+              document.getElementById('startTime').value = '';
+              
+              // Restore all original times
+              const captions = document.querySelectorAll('.caption-item');
+              captions.forEach(caption => {
+                const originalTimestamp = caption.getAttribute('data-timestamp');
+                if (originalTimestamp) {
+                  const date = new Date(originalTimestamp);
+                  const timeSpan = caption.querySelector('.caption-time .time');
+                  const dateSpan = caption.querySelector('.caption-time .date');
+                  if (timeSpan) timeSpan.textContent = date.toLocaleTimeString();
+                  if (dateSpan) dateSpan.textContent = date.toLocaleDateString();
+                }
+              });
+
+              // Hide indicator
+              const indicator = document.getElementById('timeOffsetIndicator');
+              indicator.classList.remove('active');
+              indicator.textContent = '';
+            }
+
+            // Apply offset to all captions
+            function applyOffsetToAllCaptions() {
+              const captions = document.querySelectorAll('.caption-item');
+              captions.forEach(caption => {
+                const originalTimestamp = caption.getAttribute('data-timestamp');
+                if (originalTimestamp) {
+                  const originalDate = new Date(originalTimestamp);
+                  const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
+                  
+                  const timeSpan = caption.querySelector('.caption-time .time');
+                  const dateSpan = caption.querySelector('.caption-time .date');
+                  if (timeSpan) timeSpan.textContent = adjustedDate.toLocaleTimeString();
+                  if (dateSpan) dateSpan.textContent = adjustedDate.toLocaleDateString();
+                }
+              });
+            }
+
+            // Apply stored offset on page load
+            function applyStoredOffset() {
+              if (timeOffsetMs !== 0) {
+                applyOffsetToAllCaptions();
+              }
+            }
+
+            // Update time offset indicator
+            function updateTimeOffsetIndicator() {
+              const indicator = document.getElementById('timeOffsetIndicator');
+              if (timeOffsetMs !== 0) {
+                const offsetHours = Math.floor(Math.abs(timeOffsetMs) / 3600000);
+                const offsetMinutes = Math.floor((Math.abs(timeOffsetMs) % 3600000) / 60000);
+                const offsetSeconds = Math.floor((Math.abs(timeOffsetMs) % 60000) / 1000);
+                const sign = timeOffsetMs >= 0 ? '+' : '-';
+                
+                let offsetStr = '';
+                if (offsetHours > 0) offsetStr += \`\${offsetHours}h \`;
+                if (offsetMinutes > 0) offsetStr += \`\${offsetMinutes}m \`;
+                if (offsetSeconds > 0 || offsetStr === '') offsetStr += \`\${offsetSeconds}s\`;
+                
+                indicator.textContent = \` (Time adjusted: \${sign}\${offsetStr})\`;
+                indicator.classList.add('active');
+              } else {
+                indicator.classList.remove('active');
+                indicator.textContent = '';
+              }
+            }
+
+            // Detect if user is at bottom of page
+            function isAtBottom() {
+              const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+              const windowHeight = window.innerHeight;
+              const documentHeight = document.documentElement.scrollHeight;
+              return (documentHeight - (scrollTop + windowHeight)) < 100; // Within 100px of bottom
+            }
+
+            // Smart scroll: only autoscroll if user is at bottom
+            function smartScroll() {
+              if (autoScrollEnabled && isAtBottom()) {
+                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+              }
+            }
+
+            // Track user scrolling
+            window.addEventListener('scroll', () => {
+              clearTimeout(scrollTimeout);
+              
+              // Check if user scrolled away from bottom
+              if (!isAtBottom()) {
+                autoScrollEnabled = false;
+              } else {
+                // User scrolled back to bottom, re-enable autoscroll
+                autoScrollEnabled = true;
+              }
+              
+              // Mark as user scrolling
+              isUserScrolling = true;
+              scrollTimeout = setTimeout(() => {
+                isUserScrolling = false;
+              }, 150);
+            });
+
             // Handle export dropdown
             document.getElementById('exportFormat').addEventListener('change', function(e) {
               const value = e.target.value;
@@ -1117,21 +1491,32 @@ app.get('/transcript', (req, res) => {
               switch(value) {
                 case 'txt-with':
                   url = '/transcript?format=txt&timestamp=true';
+                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'txt-without':
                   url = '/transcript?format=txt&timestamp=false';
                   break;
                 case 'csv-with':
                   url = '/transcript?format=csv&timestamp=true';
+                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'csv-without':
                   url = '/transcript?format=csv&timestamp=false';
                   break;
                 case 'json':
                   url = '/transcript?format=json';
+                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'srt':
                   url = '/transcript?format=srt';
+                  // Include time offset if set
+                  if (timeOffsetMs !== 0) {
+                    url += '&offset=' + timeOffsetMs;
+                  }
+                  // Include start time if set (for SRT base time)
+                  if (startTimeValue) {
+                    url += '&startTime=' + encodeURIComponent(startTimeValue);
+                  }
                   break;
               }
 
@@ -1144,6 +1529,7 @@ app.get('/transcript', (req, res) => {
             });
 
             function scrollToBottom() {
+              autoScrollEnabled = true;
               window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
             }
 
@@ -1159,6 +1545,122 @@ app.get('/transcript', (req, res) => {
               }
             }
 
+            // Inline editing functionality
+            function editCaption(button) {
+              const captionItem = button.closest('.caption-item');
+              const captionText = captionItem.querySelector('.caption-text');
+              const originalText = captionText.getAttribute('data-original');
+              
+              // Don't allow multiple edits at once
+              if (document.querySelector('.caption-item.editing')) {
+                alert('Please finish editing the current caption first.');
+                return;
+              }
+              
+              captionItem.classList.add('editing');
+              captionText.contentEditable = true;
+              captionText.focus();
+              
+              // Select all text
+              const range = document.createRange();
+              range.selectNodeContents(captionText);
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              
+              // Create action buttons
+              const actionsDiv = document.createElement('div');
+              actionsDiv.className = 'edit-actions';
+              actionsDiv.innerHTML = \`
+                <button class="cancel-btn" onclick="cancelEdit(this)">❌ Cancel</button>
+                <button class="save-btn" onclick="saveEdit(this)">💾 Save</button>
+              \`;
+              captionItem.appendChild(actionsDiv);
+              
+              // Hide edit button
+              button.style.display = 'none';
+            }
+
+            function cancelEdit(button) {
+              const captionItem = button.closest('.caption-item');
+              const captionText = captionItem.querySelector('.caption-text');
+              const originalText = captionText.getAttribute('data-original');
+              
+              // Restore original text (decode HTML entities)
+              const textarea = document.createElement('textarea');
+              textarea.innerHTML = originalText;
+              captionText.textContent = textarea.value;
+              
+              captionText.contentEditable = false;
+              captionItem.classList.remove('editing');
+              
+              // Remove action buttons
+              captionItem.querySelector('.edit-actions').remove();
+              
+              // Show edit button again
+              captionItem.querySelector('.edit-btn').style.display = '';
+            }
+
+            function saveEdit(button) {
+              const captionItem = button.closest('.caption-item');
+              const captionText = captionItem.querySelector('.caption-text');
+              const newText = captionText.textContent.trim();
+              const timestamp = captionItem.getAttribute('data-timestamp');
+              
+              if (!newText) {
+                alert('Caption cannot be empty');
+                return;
+              }
+              
+              // Disable buttons during save
+              button.disabled = true;
+              button.textContent = '⏳ Saving...';
+              
+              // Send update to server
+              fetch('/transcript/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timestamp, newText })
+              })
+              .then(res => res.json())
+              .then(data => {
+                if (data.success) {
+                  // Update successful
+                  captionText.contentEditable = false;
+                  captionItem.classList.remove('editing');
+                  captionItem.classList.add('edited');
+                  
+                  // Update data-original
+                  captionText.setAttribute('data-original', newText.replace(/"/g, '&quot;'));
+                  
+                  // Add edited indicator if not already present
+                  if (!captionItem.querySelector('.edited-indicator')) {
+                    const timeDiv = captionItem.querySelector('.caption-time');
+                    const indicator = document.createElement('span');
+                    indicator.className = 'edited-indicator';
+                    indicator.textContent = 'EDITED';
+                    indicator.title = 'This caption has been manually edited';
+                    timeDiv.appendChild(indicator);
+                  }
+                  
+                  // Remove action buttons
+                  captionItem.querySelector('.edit-actions').remove();
+                  
+                  // Show edit button again
+                  captionItem.querySelector('.edit-btn').style.display = '';
+                } else {
+                  alert('Failed to save: ' + (data.error || 'Unknown error'));
+                  button.disabled = false;
+                  button.textContent = '💾 Save';
+                }
+              })
+              .catch(err => {
+                alert('Error saving caption: ' + err.message);
+                button.disabled = false;
+                button.textContent = '💾 Save';
+              });
+            }
+
             // Auto-scroll to bottom on load
             setTimeout(scrollToBottom, 100);
 
@@ -1169,30 +1671,41 @@ app.get('/transcript', (req, res) => {
               const caption = JSON.parse(event.data);
               const container = document.getElementById('captionsContainer');
 
+              // Set first caption timestamp if not set
+              if (!firstCaptionTimestamp) {
+                firstCaptionTimestamp = caption.timestamp;
+              }
+
               // Remove "no captions" message if present
               const noCaptions = container.querySelector('.no-captions');
               if (noCaptions) {
                 noCaptions.remove();
               }
 
-              // Create new caption element
-              const time = new Date(caption.timestamp).toLocaleTimeString();
-              const date = new Date(caption.timestamp).toLocaleDateString();
+              // Apply time offset if set
+              const originalDate = new Date(caption.timestamp);
+              const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
+              const time = adjustedDate.toLocaleTimeString();
+              const date = adjustedDate.toLocaleDateString();
 
               const captionDiv = document.createElement('div');
               captionDiv.className = 'caption-item';
+              captionDiv.setAttribute('data-timestamp', caption.timestamp); // Store original timestamp
               captionDiv.innerHTML = \`
-                <div class="caption-time">
-                  <span class="date">\${date}</span>
-                  <span class="time">\${time}</span>
+                <div class="caption-header">
+                  <div class="caption-time">
+                    <span class="date">\${date}</span>
+                    <span class="time">\${time}</span>
+                  </div>
+                  <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
                 </div>
-                <div class="caption-text">\${caption.text}</div>
+                <div class="caption-text" data-original="\${caption.text.replace(/"/g, '&quot;')}">\${caption.text}</div>
               \`;
 
               container.appendChild(captionDiv);
 
-              // Auto-scroll to new caption
-              scrollToBottom();
+              // Smart auto-scroll to new caption (only if user is at bottom)
+              smartScroll();
 
               // Update stats
               const stats = document.querySelector('.stats');
@@ -1208,6 +1721,15 @@ app.get('/transcript', (req, res) => {
               console.error('SSE Error:', err);
               // Reconnection is automatic
             };
+
+            // Initialize time offset on page load
+            window.addEventListener('DOMContentLoaded', initTimeOffset);
+            // Also call immediately in case DOMContentLoaded already fired
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', initTimeOffset);
+            } else {
+              initTimeOffset();
+            }
           </script>
         </body>
       </html>
@@ -1230,6 +1752,59 @@ app.post('/transcript/clear', (req, res) => {
     captionHistory.length = 0;
     logger.info('Captions cleared by user');
     res.json({ message: 'All captions cleared successfully' });
+  });
+});
+
+/**
+ * Edit caption endpoint
+ */
+app.post('/transcript/edit', (req, res) => {
+  const { timestamp, newText } = req.body;
+  
+  if (!timestamp || !newText) {
+    return res.status(400).json({ success: false, error: 'Missing timestamp or newText' });
+  }
+  
+  // Read the captions file
+  fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
+    if (err) {
+      logger.error('Failed to read captions for edit:', err.message);
+      return res.status(500).json({ success: false, error: 'Failed to read captions file' });
+    }
+    
+    // Parse and update the caption
+    const lines = data.split('\n').filter(line => line.trim());
+    let updated = false;
+    const updatedLines = lines.map(line => {
+      const parts = line.split('\t');
+      if (parts[0] === timestamp) {
+        updated = true;
+        logger.info(`Caption edited: "${parts.slice(1).join('\t')}" → "${newText}"`);
+        return `${timestamp}\t${newText}`;
+      }
+      return line;
+    });
+    
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Caption not found' });
+    }
+    
+    // Write back to file
+    const newContent = updatedLines.join('\n') + '\n';
+    fs.writeFile(CAPTIONS_LOG_FILE, newContent, 'utf8', (err) => {
+      if (err) {
+        logger.error('Failed to save edited caption:', err.message);
+        return res.status(500).json({ success: false, error: 'Failed to save changes' });
+      }
+      
+      // Update in-memory history if present
+      const memoryEntry = captionHistory.find(c => c.timestamp === timestamp);
+      if (memoryEntry) {
+        memoryEntry.text = newText;
+      }
+      
+      res.json({ success: true, message: 'Caption updated successfully' });
+    });
   });
 });
 

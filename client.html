@@ -861,11 +861,20 @@
           <div class="settings-grid">
             <div class="setting-item">
               <label class="setting-label">Audio Buffer Size</label>
-              <input type="range" id="audioBufferSize" class="setting-input" min="512" max="8192" value="2048" step="256">
+              <input type="range" id="audioBufferSize" class="setting-input" min="0" max="6" value="3" step="1" list="bufferSizes">
+              <datalist id="bufferSizes">
+                <option value="0" label="256"></option>
+                <option value="1" label="512"></option>
+                <option value="2" label="1024"></option>
+                <option value="3" label="2048"></option>
+                <option value="4" label="4096"></option>
+                <option value="5" label="8192"></option>
+                <option value="6" label="16384"></option>
+              </datalist>
               <span class="setting-value" id="audioBufferSizeValue">2048 samples (~128ms)</span>
               <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">
                 Lower = less delay, higher = more stable<br>
-                <span style="opacity: 0.8;">Note: Restart recording to apply changes</span>
+                <span style="opacity: 0.8;">Note: Must be a power of 2. Restart recording to apply changes.</span>
               </div>
             </div>
           </div>
@@ -1197,7 +1206,17 @@
 
         // Create ScriptProcessorNode for audio processing
         // Use configurable buffer size from settings (default: 2048 = ~128ms at 16kHz)
-        const bufferSize = currentSettings.audioBufferSize || 2048;
+        // Map slider value to actual power-of-two buffer size
+        const bufferSizes = [256, 512, 1024, 2048, 4096, 8192, 16384];
+        const sliderValue = currentSettings.audioBufferSize || 3; // Default to index 3 (2048)
+        let bufferSize = bufferSizes[sliderValue] || 2048;
+        
+        // Validate it's a power of two (safety check)
+        if (bufferSize & (bufferSize - 1) || bufferSize < 256 || bufferSize > 16384) {
+          console.error(`❌ Invalid buffer size: ${bufferSize}. Using default 2048.`);
+          bufferSize = 2048;
+        }
+        
         console.log(`🎵 Using audio buffer size: ${bufferSize} samples (~${(bufferSize / 16000 * 1000).toFixed(0)}ms latency)`);
         processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
 
@@ -1345,8 +1364,11 @@
         { id: 'fadeOutDuration', valueId: 'fadeOutDurationValue', format: (v) => `${v}ms` },
         { id: 'pauseThreshold', valueId: 'pauseThresholdValue', format: (v) => `${v}ms (${v/1000}s)` },
         { id: 'audioBufferSize', valueId: 'audioBufferSizeValue', format: (v) => {
-          const latency = (v / 16000 * 1000).toFixed(0);
-          return `${v} samples (~${latency}ms)`;
+          // Map slider value (0-6) to power-of-two buffer sizes
+          const bufferSizes = [256, 512, 1024, 2048, 4096, 8192, 16384];
+          const actualSize = bufferSizes[parseInt(v)] || 2048;
+          const latency = (actualSize / 16000 * 1000).toFixed(0);
+          return `${actualSize} samples (~${latency}ms)`;
         }}
       ];
 
@@ -1433,7 +1455,7 @@
         pauseThreshold: parseInt(document.getElementById('pauseThreshold').value),
         autoClear: document.getElementById('autoClear').value === 'true',
         
-        // Audio Processing
+        // Audio Processing (slider value 0-6, will be mapped to power-of-two sizes)
         audioBufferSize: parseInt(document.getElementById('audioBufferSize').value)
       };
 
@@ -1493,7 +1515,27 @@
       if (settings.fadeOutDuration !== undefined) document.getElementById('fadeOutDuration').value = settings.fadeOutDuration;
       if (settings.pauseThreshold !== undefined) document.getElementById('pauseThreshold').value = settings.pauseThreshold;
       if (settings.autoClear !== undefined) document.getElementById('autoClear').value = settings.autoClear.toString();
-      if (settings.audioBufferSize !== undefined) document.getElementById('audioBufferSize').value = settings.audioBufferSize;
+      // Handle audioBufferSize: migrate from old format (actual size) to new format (slider index)
+      if (settings.audioBufferSize !== undefined) {
+        const bufferSizes = [256, 512, 1024, 2048, 4096, 8192, 16384];
+        let sliderIndex;
+        
+        // If it's a large number (actual buffer size), find the index
+        if (settings.audioBufferSize >= 256) {
+          sliderIndex = bufferSizes.indexOf(settings.audioBufferSize);
+          if (sliderIndex === -1) {
+            // Not found, find nearest power of two
+            sliderIndex = bufferSizes.findIndex(size => size >= settings.audioBufferSize) || 3;
+          }
+        } else {
+          // Already a slider index (0-6)
+          sliderIndex = settings.audioBufferSize;
+        }
+        
+        // Clamp to valid range
+        sliderIndex = Math.max(0, Math.min(6, sliderIndex));
+        document.getElementById('audioBufferSize').value = sliderIndex;
+      }
 
       // Trigger value updates
       document.querySelectorAll('input[type="range"]').forEach(input => {
@@ -1524,7 +1566,7 @@
         fadeOutDuration: 300,
         pauseThreshold: 5000,
         autoClear: true,
-        audioBufferSize: 2048
+        audioBufferSize: 3  // Index 3 = 2048 samples (power of 2)
       };
 
       applySettingsToUI(defaults);
