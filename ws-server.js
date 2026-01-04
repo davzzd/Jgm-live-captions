@@ -114,13 +114,14 @@ function logCaption(text, isFinal = true) {
     session: new Date().toISOString().split('T')[0] // Date as session ID
   };
 
-  // Add to in-memory history (limit to last 1000 captions)
+  // Add to in-memory history (limit to last 1000 captions for quick access)
   captionHistory.push(entry);
   if (captionHistory.length > 1000) {
     captionHistory.shift();
   }
 
-  // Write to file (append)
+  // Write to file (append) - file grows indefinitely, no auto-clear
+  // File is only cleared manually via /transcript/clear endpoint
   const logLine = `${timestamp}\t${text}\n`;
   captionsStream.write(logLine);
 
@@ -227,32 +228,109 @@ class YouTubeCaptionPublisher {
     }
 
     const formattedCaption = formatYouTubeCaption(caption);
-    if (!formattedCaption) {
+    if (!formattedCaption || !formattedCaption.trim()) {
+      console.log('⚠️ Skipping empty caption');
       return;
     }
 
     // Always log when attempting to send to YouTube
-    console.log('📤 Sending caption to YouTube:', formattedCaption.substring(0, 50) + (formattedCaption.length > 50 ? '...' : ''));
+    console.log(`📤 Sending caption to YouTube (seq: ${this.sequenceNumber + 1}):`, formattedCaption.replace(/\n/g, ' | ').substring(0, 80) + (formattedCaption.length > 80 ? '...' : ''));
 
     const startTime = Date.now();
+    
+    // Variables for error handling and retry
+    let cleanedLines = [];
+    let isMultiLine = false;
+    let finalCaption = '';
+    let timestamp = '';
+    let urlWithParams = '';
+    
     try {
       // Increment sequence number for YouTube (required for live captions)
       this.sequenceNumber++;
       
       // Build URL with sequence number and language as query parameters
-      const urlWithParams = `${this.postUrl}${this.postUrl.includes('?') ? '&' : '?'}seq=${this.sequenceNumber}&lang=${this.language}`;
+      urlWithParams = `${this.postUrl}${this.postUrl.includes('?') ? '&' : '?'}seq=${this.sequenceNumber}&lang=${this.language}`;
       
       // Generate timestamp in UTC format: YYYY-MM-DDTHH:MM:SS.mmm
       const now = new Date();
-      const timestamp = now.toISOString().replace('Z', '').substring(0, 23); // Remove 'Z' and keep milliseconds
+      timestamp = now.toISOString().replace('Z', '').substring(0, 23); // Remove 'Z' and keep milliseconds
       
-      // Clean caption text - remove control characters and collapse whitespace
-      let captionClean = formattedCaption.replace(/[\x00-\x1F]/g, ' '); // Replace control chars with space
-      captionClean = captionClean.replace(/\s+/g, ' ').trim(); // Collapse multiple spaces
+      // Clean caption text - YouTube expects clean text
+      // Process line by line to ensure proper formatting
+      const lines = formattedCaption.split('\n').filter(line => line.trim().length > 0);
+      
+      // Validate: YouTube requires max 2 lines
+      if (lines.length > 2) {
+        console.warn(`⚠️ Caption has ${lines.length} lines, truncating to 2`);
+        lines.splice(2);
+      }
+      
+      // Clean and validate each line
+      cleanedLines = [];
+      for (let i = 0; i < lines.length; i++) {
+        let line = lines[i]
+          .replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]/g, '') // Remove control chars (keep structure)
+          .replace(/[ \t]+/g, ' ') // Collapse spaces/tabs
+          .trim();
+        
+        // Validate line length (YouTube limit: 32 chars per line)
+        if (line.length > 32) {
+          console.warn(`⚠️ Line ${i + 1} exceeds 32 chars (${line.length}), truncating: "${line.substring(0, 35)}..."`);
+          line = line.substring(0, 32);
+        }
+        
+        if (line.length > 0) {
+          cleanedLines.push(line);
+        }
+      }
+      
+      // Validate we have at least one line
+      if (cleanedLines.length === 0) {
+        console.warn('⚠️ Skipping empty caption after cleaning');
+        return;
+      }
+      
+      // Final caption - YouTube seems to reject multi-line format, so always use single-line
+      // Join lines with space instead of newline to ensure compatibility
+      finalCaption = cleanedLines.join(' ');
+      isMultiLine = false; // Always treat as single-line for YouTube compatibility
+      
+      // If the single-line would be too long, truncate to 64 chars (YouTube's practical limit)
+      if (finalCaption.length > 64) {
+        console.warn(`⚠️ Caption exceeds 64 chars (${finalCaption.length}), truncating`);
+        finalCaption = finalCaption.substring(0, 61) + '...';
+      }
       
       // YouTube expects: timestamp\ncaption\n (with trailing newline)
-      const payload = `${timestamp}\n${captionClean}\n`;
+      // For multi-line: timestamp\nline1\nline2\n
+      // For single-line: timestamp\nline1\n
+      const payload = `${timestamp}\n${finalCaption}\n`;
       const payloadBytes = Buffer.from(payload, 'utf-8');
+      
+      // Debug: Log exact payload bytes for troubleshooting (always log for multi-line, and on errors)
+      if (isMultiLine) {
+        console.log(`   🔍 Multi-line caption (${cleanedLines.length} lines):`);
+        cleanedLines.forEach((line, idx) => {
+          console.log(`      Line ${idx + 1}: "${line}" (${line.length} chars)`);
+        });
+        console.log(`   🔍 Final caption: ${JSON.stringify(finalCaption)}`);
+        console.log(`   🔍 Payload structure: timestamp\\nline1\\nline2\\n`);
+        console.log(`   🔍 Payload hex (first 120 bytes): ${payloadBytes.slice(0, 120).toString('hex')}`);
+        console.log(`   🔍 Payload repr: ${JSON.stringify(payload.substring(0, 200))}`);
+      }
+      
+      // Validate payload doesn't contain invalid characters
+      if (payloadBytes.includes(0x00)) {
+        console.error('❌ Payload contains null bytes, skipping');
+        return;
+      }
+      
+      // Validate timestamp format is correct (YYYY-MM-DDTHH:MM:SS.mmm)
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/.test(timestamp)) {
+        console.error(`❌ Invalid timestamp format: ${timestamp}`);
+        return;
+      }
 
       console.log(`   URL: ${urlWithParams}`);
       console.log(`   Timestamp: ${timestamp}`);
@@ -260,6 +338,16 @@ class YouTubeCaptionPublisher {
       console.log(`   Payload length: ${payloadBytes.length} bytes`);
       console.log(`   Payload preview: ${payload.substring(0, 100).replace(/\n/g, '\\n')}...`);
       
+      // Ensure payload is valid UTF-8 and doesn't have BOM or other issues
+      try {
+        // Verify it's valid UTF-8
+        payloadBytes.toString('utf-8');
+      } catch (e) {
+        console.error('❌ Payload is not valid UTF-8, skipping');
+        return;
+      }
+      
+      // Send as Buffer to ensure raw bytes are sent (matching Python implementation)
       const response = await axios.post(
         urlWithParams,
         payloadBytes,
@@ -269,17 +357,26 @@ class YouTubeCaptionPublisher {
             'Content-Type': 'text/plain; charset=utf-8',
             'User-Agent': 'Soniox-Streamer/1.0',
           },
+          // Ensure axios sends raw bytes, not JSON
+          transformRequest: [(data) => {
+            // If it's a Buffer, return it as-is
+            if (Buffer.isBuffer(data)) {
+              return data;
+            }
+            return data;
+          }],
         }
       );
 
       const duration = Date.now() - startTime;
 
       if (response.status === 200) {
-        console.log(`✅ YouTube caption sent successfully (${duration}ms) - Status: ${response.status}`);
+        console.log(`✅ YouTube caption sent successfully (seq: ${this.sequenceNumber}, ${duration}ms)`);
         if (response.data) {
-          console.log(`   Response: ${JSON.stringify(response.data).substring(0, 100)}`);
+          const responseStr = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+          console.log(`   YouTube response: ${responseStr.substring(0, 100).replace(/\n/g, '\\n')}`);
         } else {
-          console.log(`   Response: (empty body)`);
+          console.log(`   YouTube response: (empty body)`);
         }
       } else {
         console.warn(`⚠️ YouTube caption POST returned status ${response.status}: ${response.statusText}`);
@@ -287,15 +384,89 @@ class YouTubeCaptionPublisher {
           console.warn(`   Response body: ${JSON.stringify(response.data).substring(0, 200)}`);
         }
       }
-    } catch (error) {
-      // Always log errors (not just 10% of the time) so user knows what's happening
-      const duration = Date.now() - startTime;
-      if (error.response) {
-        // Server responded with error status
-        console.error(`❌ YouTube caption POST failed: ${error.response.status} ${error.response.statusText} (${duration}ms)`);
-        if (error.response.data) {
-          console.error(`   Error response: ${JSON.stringify(error.response.data).substring(0, 200)}`);
+      } catch (error) {
+        // Always log errors (not just 10% of the time) so user knows what's happening
+        const duration = Date.now() - startTime;
+        
+        // Enhanced error logging for debugging - use try-catch to ensure we can always log
+        try {
+          console.error(`❌ YouTube caption POST failed: ${error.response?.status || 'No response'} ${error.response?.statusText || error.message} (${duration}ms)`);
+          console.error(`   Sequence: ${this.sequenceNumber}`);
+          
+          // Safely access variables that might not exist if error occurred early
+          if (typeof timestamp !== 'undefined') {
+            console.error(`   Timestamp: ${timestamp}`);
+          }
+          if (typeof cleanedLines !== 'undefined') {
+            console.error(`   Caption lines: ${cleanedLines.length}`);
+            if (typeof isMultiLine !== 'undefined' && isMultiLine) {
+              console.error(`   🔴 MULTI-LINE CAPTION THAT FAILED:`);
+              cleanedLines.forEach((line, idx) => {
+                console.error(`      Line ${idx + 1}: "${line}" (${line.length} chars)`);
+              });
+              if (typeof finalCaption !== 'undefined') {
+                console.error(`   Final caption: ${JSON.stringify(finalCaption)}`);
+              }
+            } else if (typeof finalCaption !== 'undefined') {
+              console.error(`   Single-line caption: "${finalCaption}"`);
+            }
+          }
+          if (typeof payloadBytes !== 'undefined') {
+            console.error(`   Payload length: ${payloadBytes.length} bytes`);
+            if (typeof payload !== 'undefined') {
+              console.error(`   Payload preview: ${payload.substring(0, 150).replace(/\n/g, '\\n')}`);
+              console.error(`   Payload hex: ${payloadBytes.slice(0, 100).toString('hex')}`);
+            }
+          }
+        } catch (logError) {
+          console.error(`   (Error logging details failed: ${logError.message})`);
         }
+        
+        if (error.response) {
+          // Server responded with error status
+          if (error.response.data) {
+            const errorData = typeof error.response.data === 'string' 
+              ? error.response.data 
+              : JSON.stringify(error.response.data);
+            console.error(`   Error response: ${errorData.substring(0, 300)}`);
+            
+            // If multi-line caption failed with "Can't parse", try as single-line
+            if (error.response.status === 400 && 
+                typeof errorData === 'string' && 
+                errorData.includes("Can't parse") &&
+                isMultiLine &&
+                cleanedLines.length > 0) {
+              console.warn(`   ⚠️ Multi-line caption failed, retrying as single-line...`);
+              // Retry as single-line (join with space instead of newline)
+              const singleLineCaption = cleanedLines.join(' ').substring(0, 64); // YouTube max is typically 64 chars for single line
+              const retryPayload = `${timestamp}\n${singleLineCaption}\n`;
+              const retryPayloadBytes = Buffer.from(retryPayload, 'utf-8');
+              
+              try {
+                const retryResponse = await axios.post(
+                  urlWithParams,
+                  retryPayloadBytes,
+                  {
+                    timeout: 10000,
+                    headers: {
+                      'Content-Type': 'text/plain; charset=utf-8',
+                      'User-Agent': 'Soniox-Streamer/1.0',
+                    },
+                    transformRequest: [(data) => {
+                      if (Buffer.isBuffer(data)) return data;
+                      return data;
+                    }],
+                  }
+                );
+                if (retryResponse.status === 200) {
+                  console.log(`   ✅ Retry as single-line succeeded (seq: ${this.sequenceNumber})`);
+                  return; // Success on retry
+                }
+              } catch (retryError) {
+                console.error(`   ❌ Retry as single-line also failed: ${retryError.message}`);
+              }
+            }
+          }
       } else if (error.request) {
         // Request was made but no response received
         console.error(`❌ YouTube caption POST failed: No response received (timeout or network error) (${duration}ms)`);
@@ -641,8 +812,10 @@ app.post('/logs/clear', (req, res) => {
  * Transcript/Caption History endpoint - view and export all captions
  */
 app.get('/transcript', (req, res) => {
-  const format = req.query.format || 'html'; // html, txt, csv, json
-  const limit = parseInt(req.query.limit) || 1000;
+  const format = req.query.format || 'html'; // html, txt, csv, json, srt
+  // Default limit: 0 means show ALL captions (no limit)
+  // Set ?limit=N to show only last N captions
+  const limit = req.query.limit ? parseInt(req.query.limit) : 0;
 
   // Read from file for complete history
   fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
@@ -664,8 +837,8 @@ app.get('/transcript', (req, res) => {
       });
     }
 
-    // Get last N captions
-    const displayCaptions = captions.slice(-limit);
+    // Get captions to display (all if limit is 0, otherwise last N)
+    const displayCaptions = limit > 0 ? captions.slice(-limit) : captions;
 
     // Export formats
     if (format === 'json') {
@@ -702,6 +875,74 @@ app.get('/transcript', (req, res) => {
       res.setHeader('Content-Type', 'text/plain');
       res.setHeader('Content-Disposition', `attachment; filename="transcript-${new Date().toISOString().split('T')[0]}.txt"`);
       return res.send(txt);
+    }
+
+    if (format === 'srt') {
+      // SRT (SubRip) subtitle format
+      // Format: sequence number, timestamp range, caption text, blank line
+      
+      if (displayCaptions.length === 0) {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.srt"`);
+        return res.send('');
+      }
+      
+      // Helper function to convert milliseconds to SRT time format (HH:MM:SS,mmm)
+      function toSRTTime(totalMs) {
+        const hours = Math.floor(totalMs / 3600000);
+        const minutes = Math.floor((totalMs % 3600000) / 60000);
+        const seconds = Math.floor((totalMs % 60000) / 1000);
+        const milliseconds = totalMs % 1000;
+        
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+      }
+      
+      // Calculate relative times from first caption (SRT standard)
+      const firstCaptionTime = new Date(displayCaptions[0].timestamp).getTime();
+      const defaultDuration = 3000; // 3 seconds in milliseconds
+      const maxDuration = 8000; // Max 8 seconds per caption
+      const minDuration = 1000; // Min 1 second per caption
+      
+      let srtContent = '';
+      let sequenceNumber = 1;
+      
+      for (let i = 0; i < displayCaptions.length; i++) {
+        const caption = displayCaptions[i];
+        const currentTime = new Date(caption.timestamp).getTime();
+        const relativeStart = currentTime - firstCaptionTime;
+        
+        // Calculate end time
+        let relativeEnd;
+        if (i < displayCaptions.length - 1) {
+          const nextTime = new Date(displayCaptions[i + 1].timestamp).getTime();
+          const duration = Math.min(nextTime - currentTime, maxDuration);
+          relativeEnd = relativeStart + Math.max(duration, minDuration);
+        } else {
+          // Last caption: use default duration
+          relativeEnd = relativeStart + defaultDuration;
+        }
+        
+        // Format SRT entry
+        const startSRT = toSRTTime(relativeStart);
+        const endSRT = toSRTTime(relativeEnd);
+        
+        // Clean caption text (remove control characters, preserve line breaks if needed)
+        const cleanText = caption.text
+          .replace(/\r\n/g, '\n')
+          .replace(/\r/g, '\n')
+          .replace(/\n{3,}/g, '\n\n'); // Max 2 consecutive newlines
+        
+        srtContent += `${sequenceNumber}\n`;
+        srtContent += `${startSRT} --> ${endSRT}\n`;
+        srtContent += `${cleanText}\n`;
+        srtContent += `\n`; // Blank line between entries
+        
+        sequenceNumber++;
+      }
+      
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.srt"`);
+      return res.send(srtContent);
     }
 
     // HTML view (default)
@@ -844,6 +1085,7 @@ app.get('/transcript', (req, res) => {
                 <option value="csv-with">CSV (with timestamps)</option>
                 <option value="csv-without">CSV (no timestamps)</option>
                 <option value="json">JSON</option>
+                <option value="srt">SRT (SubRip subtitles)</option>
               </select>
               <button onclick="location.reload()">🔄 Refresh</button>
               <button onclick="scrollToBottom()">⬇️ Latest</button>
@@ -851,6 +1093,8 @@ app.get('/transcript', (req, res) => {
             </div>
             <div class="stats">
               Showing ${displayCaptions.length.toLocaleString()} of ${captions.length.toLocaleString()} captions
+              ${limit > 0 ? `(limited to last ${limit})` : '(showing all)'}
+              ${captions.length > 10000 ? '<br><span style="color: #dcdcaa;">⚠️ Large file detected. Consider using ?limit=N to view recent captions only.</span>' : ''}
             </div>
           </div>
           <div class="content" id="captionsContainer">
@@ -878,6 +1122,9 @@ app.get('/transcript', (req, res) => {
                   break;
                 case 'json':
                   url = '/transcript?format=json';
+                  break;
+                case 'srt':
+                  url = '/transcript?format=srt';
                   break;
               }
 
