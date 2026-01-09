@@ -52,8 +52,17 @@ function log(level, message, ...args) {
 
   const logEntry = `[${timestamp}] [${level}] ${formattedMessage}\n`;
 
-  // Write to file
-  logStream.write(logEntry);
+  // Write to file (check if stream is still writable)
+  try {
+    if (logStream && logStream.writable && !logStream.destroyed) {
+      logStream.write(logEntry);
+    }
+  } catch (err) {
+    // Stream might be closed, ignore during shutdown
+    if (err.code !== 'ERR_STREAM_WRITE_AFTER_END') {
+      originalConsoleError('Error writing to log stream:', err.message);
+    }
+  }
 
   // Broadcast to SSE clients
   logsSSEClients.forEach(client => {
@@ -114,15 +123,25 @@ function logCaption(text, isFinal = true) {
     session: new Date().toISOString().split('T')[0] // Date as session ID
   };
 
-  // Add to in-memory history (limit to last 1000 captions)
+  // Add to in-memory history (limit to last 1000 captions for quick access)
   captionHistory.push(entry);
   if (captionHistory.length > 1000) {
     captionHistory.shift();
   }
 
-  // Write to file (append)
+  // Write to file (append) - file grows indefinitely, no auto-clear
+  // File is only cleared manually via /transcript/clear endpoint
   const logLine = `${timestamp}\t${text}\n`;
-  captionsStream.write(logLine);
+  try {
+    if (captionsStream && captionsStream.writable && !captionsStream.destroyed) {
+      captionsStream.write(logLine);
+    }
+  } catch (err) {
+    // Stream might be closed, ignore during shutdown
+    if (err.code !== 'ERR_STREAM_WRITE_AFTER_END') {
+      originalConsoleError('Error writing to captions stream:', err.message);
+    }
+  }
 
   // Broadcast to SSE clients
   const sseData = JSON.stringify(entry);
@@ -140,6 +159,9 @@ logger.info('===== Server starting =====');
 const app = express();
 const server = http.createServer(app);
 
+// Middleware
+app.use(express.json()); // Parse JSON request bodies
+
 // WebSocket server for browser clients (mic input)
 const wssClients = new WebSocket.Server({ 
   noServer: true,
@@ -154,7 +176,7 @@ const wssCaptions = new WebSocket.Server({
 
 // Soniox configuration
 const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
-const SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '885a41baf0c85746228dd44ab442c3770e2c69f4f6f22bb7e3244de0d6d7899c';
+const DEFAULT_SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '885a41baf0c85746228dd44ab442c3770e2c69f4f6f22bb7e3244de0d6d7899c';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
 // YouTube Captions configuration (optional - only used if YOUTUBE_CAPTION_URL is set)
@@ -162,9 +184,18 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 const YOUTUBE_CAPTIONS_URL = process.env.YOUTUBE_CAPTION_URL || process.env.YOUTUBE_CAPTIONS_URL;
 const YOUTUBE_CAPTIONS_LANGUAGE = process.env.LANGUAGE || 'en';
 
+// Soniox connection state management
 let sonioxWs = null;
 let isSonioxConfigured = false;
+let sonioxConnectionState = 'disconnected'; // 'disconnected', 'connecting', 'connected', 'error'
+let currentSonioxConfig = {
+  apiKey: DEFAULT_SONIOX_API_KEY,
+  sourceLanguage: 'ml', // Malayalam (default)
+  targetLanguage: 'en'  // English (default)
+};
+let manualDisconnect = false; // Track if user manually disconnected
 let captionClients = new Set(); // Connected caption display clients
+let clientWebSockets = []; // Browser clients (mic input)
 let reconnectAttempts = 0;
 let reconnectTimeout = null;
 let lastAudioSentTime = 0;
@@ -227,32 +258,109 @@ class YouTubeCaptionPublisher {
     }
 
     const formattedCaption = formatYouTubeCaption(caption);
-    if (!formattedCaption) {
+    if (!formattedCaption || !formattedCaption.trim()) {
+      console.log('⚠️ Skipping empty caption');
       return;
     }
 
     // Always log when attempting to send to YouTube
-    console.log('📤 Sending caption to YouTube:', formattedCaption.substring(0, 50) + (formattedCaption.length > 50 ? '...' : ''));
+    console.log(`📤 Sending caption to YouTube (seq: ${this.sequenceNumber + 1}):`, formattedCaption.replace(/\n/g, ' | ').substring(0, 80) + (formattedCaption.length > 80 ? '...' : ''));
 
     const startTime = Date.now();
+    
+    // Variables for error handling and retry
+    let cleanedLines = [];
+    let isMultiLine = false;
+    let finalCaption = '';
+    let timestamp = '';
+    let urlWithParams = '';
+    
     try {
       // Increment sequence number for YouTube (required for live captions)
       this.sequenceNumber++;
       
       // Build URL with sequence number and language as query parameters
-      const urlWithParams = `${this.postUrl}${this.postUrl.includes('?') ? '&' : '?'}seq=${this.sequenceNumber}&lang=${this.language}`;
+      urlWithParams = `${this.postUrl}${this.postUrl.includes('?') ? '&' : '?'}seq=${this.sequenceNumber}&lang=${this.language}`;
       
       // Generate timestamp in UTC format: YYYY-MM-DDTHH:MM:SS.mmm
       const now = new Date();
-      const timestamp = now.toISOString().replace('Z', '').substring(0, 23); // Remove 'Z' and keep milliseconds
+      timestamp = now.toISOString().replace('Z', '').substring(0, 23); // Remove 'Z' and keep milliseconds
       
-      // Clean caption text - remove control characters and collapse whitespace
-      let captionClean = formattedCaption.replace(/[\x00-\x1F]/g, ' '); // Replace control chars with space
-      captionClean = captionClean.replace(/\s+/g, ' ').trim(); // Collapse multiple spaces
+      // Clean caption text - YouTube expects clean text
+      // Process line by line to ensure proper formatting
+      const lines = formattedCaption.split('\n').filter(line => line.trim().length > 0);
+      
+      // Validate: YouTube requires max 2 lines
+      if (lines.length > 2) {
+        console.warn(`⚠️ Caption has ${lines.length} lines, truncating to 2`);
+        lines.splice(2);
+      }
+      
+      // Clean and validate each line
+      cleanedLines = [];
+      for (let i = 0; i < lines.length; i++) {
+        let line = lines[i]
+          .replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]/g, '') // Remove control chars (keep structure)
+          .replace(/[ \t]+/g, ' ') // Collapse spaces/tabs
+          .trim();
+        
+        // Validate line length (YouTube limit: 32 chars per line)
+        if (line.length > 32) {
+          console.warn(`⚠️ Line ${i + 1} exceeds 32 chars (${line.length}), truncating: "${line.substring(0, 35)}..."`);
+          line = line.substring(0, 32);
+        }
+        
+        if (line.length > 0) {
+          cleanedLines.push(line);
+        }
+      }
+      
+      // Validate we have at least one line
+      if (cleanedLines.length === 0) {
+        console.warn('⚠️ Skipping empty caption after cleaning');
+        return;
+      }
+      
+      // Final caption - YouTube seems to reject multi-line format, so always use single-line
+      // Join lines with space instead of newline to ensure compatibility
+      finalCaption = cleanedLines.join(' ');
+      isMultiLine = false; // Always treat as single-line for YouTube compatibility
+      
+      // If the single-line would be too long, truncate to 64 chars (YouTube's practical limit)
+      if (finalCaption.length > 64) {
+        console.warn(`⚠️ Caption exceeds 64 chars (${finalCaption.length}), truncating`);
+        finalCaption = finalCaption.substring(0, 61) + '...';
+      }
       
       // YouTube expects: timestamp\ncaption\n (with trailing newline)
-      const payload = `${timestamp}\n${captionClean}\n`;
+      // For multi-line: timestamp\nline1\nline2\n
+      // For single-line: timestamp\nline1\n
+      const payload = `${timestamp}\n${finalCaption}\n`;
       const payloadBytes = Buffer.from(payload, 'utf-8');
+      
+      // Debug: Log exact payload bytes for troubleshooting (always log for multi-line, and on errors)
+      if (isMultiLine) {
+        console.log(`   🔍 Multi-line caption (${cleanedLines.length} lines):`);
+        cleanedLines.forEach((line, idx) => {
+          console.log(`      Line ${idx + 1}: "${line}" (${line.length} chars)`);
+        });
+        console.log(`   🔍 Final caption: ${JSON.stringify(finalCaption)}`);
+        console.log(`   🔍 Payload structure: timestamp\\nline1\\nline2\\n`);
+        console.log(`   🔍 Payload hex (first 120 bytes): ${payloadBytes.slice(0, 120).toString('hex')}`);
+        console.log(`   🔍 Payload repr: ${JSON.stringify(payload.substring(0, 200))}`);
+      }
+      
+      // Validate payload doesn't contain invalid characters
+      if (payloadBytes.includes(0x00)) {
+        console.error('❌ Payload contains null bytes, skipping');
+        return;
+      }
+      
+      // Validate timestamp format is correct (YYYY-MM-DDTHH:MM:SS.mmm)
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/.test(timestamp)) {
+        console.error(`❌ Invalid timestamp format: ${timestamp}`);
+        return;
+      }
 
       console.log(`   URL: ${urlWithParams}`);
       console.log(`   Timestamp: ${timestamp}`);
@@ -260,6 +368,16 @@ class YouTubeCaptionPublisher {
       console.log(`   Payload length: ${payloadBytes.length} bytes`);
       console.log(`   Payload preview: ${payload.substring(0, 100).replace(/\n/g, '\\n')}...`);
       
+      // Ensure payload is valid UTF-8 and doesn't have BOM or other issues
+      try {
+        // Verify it's valid UTF-8
+        payloadBytes.toString('utf-8');
+      } catch (e) {
+        console.error('❌ Payload is not valid UTF-8, skipping');
+        return;
+      }
+      
+      // Send as Buffer to ensure raw bytes are sent (matching Python implementation)
       const response = await axios.post(
         urlWithParams,
         payloadBytes,
@@ -269,17 +387,26 @@ class YouTubeCaptionPublisher {
             'Content-Type': 'text/plain; charset=utf-8',
             'User-Agent': 'Soniox-Streamer/1.0',
           },
+          // Ensure axios sends raw bytes, not JSON
+          transformRequest: [(data) => {
+            // If it's a Buffer, return it as-is
+            if (Buffer.isBuffer(data)) {
+              return data;
+            }
+            return data;
+          }],
         }
       );
 
       const duration = Date.now() - startTime;
 
       if (response.status === 200) {
-        console.log(`✅ YouTube caption sent successfully (${duration}ms) - Status: ${response.status}`);
+        console.log(`✅ YouTube caption sent successfully (seq: ${this.sequenceNumber}, ${duration}ms)`);
         if (response.data) {
-          console.log(`   Response: ${JSON.stringify(response.data).substring(0, 100)}`);
+          const responseStr = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+          console.log(`   YouTube response: ${responseStr.substring(0, 100).replace(/\n/g, '\\n')}`);
         } else {
-          console.log(`   Response: (empty body)`);
+          console.log(`   YouTube response: (empty body)`);
         }
       } else {
         console.warn(`⚠️ YouTube caption POST returned status ${response.status}: ${response.statusText}`);
@@ -287,15 +414,89 @@ class YouTubeCaptionPublisher {
           console.warn(`   Response body: ${JSON.stringify(response.data).substring(0, 200)}`);
         }
       }
-    } catch (error) {
-      // Always log errors (not just 10% of the time) so user knows what's happening
-      const duration = Date.now() - startTime;
-      if (error.response) {
-        // Server responded with error status
-        console.error(`❌ YouTube caption POST failed: ${error.response.status} ${error.response.statusText} (${duration}ms)`);
-        if (error.response.data) {
-          console.error(`   Error response: ${JSON.stringify(error.response.data).substring(0, 200)}`);
+      } catch (error) {
+        // Always log errors (not just 10% of the time) so user knows what's happening
+        const duration = Date.now() - startTime;
+        
+        // Enhanced error logging for debugging - use try-catch to ensure we can always log
+        try {
+          console.error(`❌ YouTube caption POST failed: ${error.response?.status || 'No response'} ${error.response?.statusText || error.message} (${duration}ms)`);
+          console.error(`   Sequence: ${this.sequenceNumber}`);
+          
+          // Safely access variables that might not exist if error occurred early
+          if (typeof timestamp !== 'undefined') {
+            console.error(`   Timestamp: ${timestamp}`);
+          }
+          if (typeof cleanedLines !== 'undefined') {
+            console.error(`   Caption lines: ${cleanedLines.length}`);
+            if (typeof isMultiLine !== 'undefined' && isMultiLine) {
+              console.error(`   🔴 MULTI-LINE CAPTION THAT FAILED:`);
+              cleanedLines.forEach((line, idx) => {
+                console.error(`      Line ${idx + 1}: "${line}" (${line.length} chars)`);
+              });
+              if (typeof finalCaption !== 'undefined') {
+                console.error(`   Final caption: ${JSON.stringify(finalCaption)}`);
+              }
+            } else if (typeof finalCaption !== 'undefined') {
+              console.error(`   Single-line caption: "${finalCaption}"`);
+            }
+          }
+          if (typeof payloadBytes !== 'undefined') {
+            console.error(`   Payload length: ${payloadBytes.length} bytes`);
+            if (typeof payload !== 'undefined') {
+              console.error(`   Payload preview: ${payload.substring(0, 150).replace(/\n/g, '\\n')}`);
+              console.error(`   Payload hex: ${payloadBytes.slice(0, 100).toString('hex')}`);
+            }
+          }
+        } catch (logError) {
+          console.error(`   (Error logging details failed: ${logError.message})`);
         }
+        
+        if (error.response) {
+          // Server responded with error status
+          if (error.response.data) {
+            const errorData = typeof error.response.data === 'string' 
+              ? error.response.data 
+              : JSON.stringify(error.response.data);
+            console.error(`   Error response: ${errorData.substring(0, 300)}`);
+            
+            // If multi-line caption failed with "Can't parse", try as single-line
+            if (error.response.status === 400 && 
+                typeof errorData === 'string' && 
+                errorData.includes("Can't parse") &&
+                isMultiLine &&
+                cleanedLines.length > 0) {
+              console.warn(`   ⚠️ Multi-line caption failed, retrying as single-line...`);
+              // Retry as single-line (join with space instead of newline)
+              const singleLineCaption = cleanedLines.join(' ').substring(0, 64); // YouTube max is typically 64 chars for single line
+              const retryPayload = `${timestamp}\n${singleLineCaption}\n`;
+              const retryPayloadBytes = Buffer.from(retryPayload, 'utf-8');
+              
+              try {
+                const retryResponse = await axios.post(
+                  urlWithParams,
+                  retryPayloadBytes,
+                  {
+                    timeout: 10000,
+                    headers: {
+                      'Content-Type': 'text/plain; charset=utf-8',
+                      'User-Agent': 'Soniox-Streamer/1.0',
+                    },
+                    transformRequest: [(data) => {
+                      if (Buffer.isBuffer(data)) return data;
+                      return data;
+                    }],
+                  }
+                );
+                if (retryResponse.status === 200) {
+                  console.log(`   ✅ Retry as single-line succeeded (seq: ${this.sequenceNumber})`);
+                  return; // Success on retry
+                }
+              } catch (retryError) {
+                console.error(`   ❌ Retry as single-line also failed: ${retryError.message}`);
+              }
+            }
+          }
       } else if (error.request) {
         // Request was made but no response received
         console.error(`❌ YouTube caption POST failed: No response received (timeout or network error) (${duration}ms)`);
@@ -320,13 +521,13 @@ if (process.env.YOUTUBE_CAPTION_URL || process.env.YOUTUBE_CAPTIONS_URL) {
   console.log('📺 Available env vars with YOUTUBE:', Object.keys(process.env).filter(k => k.includes('YOUTUBE') || k.includes('youtube')));
 }
 
-const youtubePublisher = new YouTubeCaptionPublisher(YOUTUBE_CAPTIONS_URL, YOUTUBE_CAPTIONS_LANGUAGE);
+// YouTube publisher - can be updated dynamically from client settings
+let youtubePublisher = new YouTubeCaptionPublisher(YOUTUBE_CAPTIONS_URL, YOUTUBE_CAPTIONS_LANGUAGE);
 if (youtubePublisher.enabled) {
   console.log('📺 YouTube captions enabled:', YOUTUBE_CAPTIONS_URL.substring(0, 50) + '...');
 } else {
   console.log('📺 YouTube captions disabled (YOUTUBE_CAPTION_URL or YOUTUBE_CAPTIONS_URL not set)');
-  console.log('📺 Tip: Make sure .env file is in the same directory as ws-server.js');
-  console.log('📺 Tip: Restart the server after adding/editing .env file');
+  console.log('📺 Tip: You can set YouTube URL in the settings panel');
 }
 
 /**
@@ -351,9 +552,16 @@ function broadcastToCaptions(text) {
 }
 
 /**
- * Serve the captions.html file
+ * Serve the client.html file as default homepage
  */
 app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/client.html');
+});
+
+/**
+ * Serve the captions.html file
+ */
+app.get('/captions', (req, res) => {
   res.sendFile(__dirname + '/captions.html');
 });
 
@@ -641,8 +849,10 @@ app.post('/logs/clear', (req, res) => {
  * Transcript/Caption History endpoint - view and export all captions
  */
 app.get('/transcript', (req, res) => {
-  const format = req.query.format || 'html'; // html, txt, csv, json
-  const limit = parseInt(req.query.limit) || 1000;
+  const format = req.query.format || 'html'; // html, txt, csv, json, srt
+  // Default limit: 0 means show ALL captions (no limit)
+  // Set ?limit=N to show only last N captions
+  const limit = req.query.limit ? parseInt(req.query.limit) : 0;
 
   // Read from file for complete history
   fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
@@ -664,21 +874,39 @@ app.get('/transcript', (req, res) => {
       });
     }
 
-    // Get last N captions
-    const displayCaptions = captions.slice(-limit);
+    // Get captions to display (all if limit is 0, otherwise last N)
+    const displayCaptions = limit > 0 ? captions.slice(-limit) : captions;
+    
+    // Get time offset from query parameter (if provided from frontend)
+    const timeOffset = parseInt(req.query.offset) || 0;
 
     // Export formats
     if (format === 'json') {
-      return res.json({ captions: displayCaptions, total: captions.length });
+      // Apply time offset to timestamps if provided
+      const exportCaptions = timeOffset !== 0 
+        ? displayCaptions.map(c => ({
+            timestamp: new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString(),
+            originalTimestamp: c.timestamp,
+            text: c.text
+          }))
+        : displayCaptions;
+      return res.json({ 
+        captions: exportCaptions, 
+        total: captions.length,
+        timeOffset: timeOffset !== 0 ? timeOffset : undefined
+      });
     }
 
     if (format === 'csv') {
       const includeTimestamp = req.query.timestamp !== 'false';
       let csv;
       if (includeTimestamp) {
-        csv = 'Timestamp,Caption\n' + displayCaptions.map(c =>
-          `"${c.timestamp}","${c.text.replace(/"/g, '""')}"`
-        ).join('\n');
+        csv = 'Timestamp,Caption\n' + displayCaptions.map(c => {
+          const timestamp = timeOffset !== 0 
+            ? new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString()
+            : c.timestamp;
+          return `"${timestamp}","${c.text.replace(/"/g, '""')}"`;
+        }).join('\n');
       } else {
         csv = 'Caption\n' + displayCaptions.map(c =>
           `"${c.text.replace(/"/g, '""')}"`
@@ -693,9 +921,12 @@ app.get('/transcript', (req, res) => {
       const includeTimestamp = req.query.timestamp !== 'false';
       let txt;
       if (includeTimestamp) {
-        txt = displayCaptions.map(c =>
-          `[${new Date(c.timestamp).toLocaleString()}] ${c.text}`
-        ).join('\n\n');
+        txt = displayCaptions.map(c => {
+          const date = timeOffset !== 0
+            ? new Date(new Date(c.timestamp).getTime() + timeOffset)
+            : new Date(c.timestamp);
+          return `[${date.toLocaleString()}] ${c.text}`;
+        }).join('\n\n');
       } else {
         txt = displayCaptions.map(c => c.text).join('\n\n');
       }
@@ -704,18 +935,113 @@ app.get('/transcript', (req, res) => {
       return res.send(txt);
     }
 
+    if (format === 'srt') {
+      // SRT (SubRip) subtitle format
+      // Format: sequence number, timestamp range, caption text, blank line
+      
+      if (displayCaptions.length === 0) {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.srt"`);
+        return res.send('');
+      }
+      
+      // Get time offset from query parameter (if provided from frontend)
+      const timeOffset = parseInt(req.query.offset) || 0;
+      
+      // Helper function to convert milliseconds to SRT time format (HH:MM:SS,mmm)
+      function toSRTTime(totalMs) {
+        // Ensure non-negative
+        totalMs = Math.max(0, totalMs);
+        
+        const hours = Math.floor(totalMs / 3600000);
+        const minutes = Math.floor((totalMs % 3600000) / 60000);
+        const seconds = Math.floor((totalMs % 60000) / 1000);
+        const milliseconds = totalMs % 1000;
+        
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+      }
+      
+      // Get first caption's adjusted timestamp
+      const firstCaptionOriginalTime = new Date(displayCaptions[0].timestamp).getTime();
+      const firstCaptionAdjustedTime = firstCaptionOriginalTime + timeOffset;
+      
+      // Parse the start time from the query parameter if provided (format: HH:MM:SS)
+      // This is the relative start time the user set (e.g., "00:05:30")
+      let startTimeMs = 0; // Default to 00:00:00
+      if (req.query.startTime) {
+        const timeParts = req.query.startTime.split(':');
+        const hours = parseInt(timeParts[0]) || 0;
+        const minutes = parseInt(timeParts[1]) || 0;
+        const seconds = parseInt(timeParts[2]) || 0;
+        startTimeMs = (hours * 3600000) + (minutes * 60000) + (seconds * 1000);
+      }
+      
+      const defaultDuration = 3000; // 3 seconds in milliseconds
+      const maxDuration = 8000; // Max 8 seconds per caption
+      const minDuration = 1000; // Min 1 second per caption
+      
+      let srtContent = '';
+      let sequenceNumber = 1;
+      
+      for (let i = 0; i < displayCaptions.length; i++) {
+        const caption = displayCaptions[i];
+        // Apply time offset to get adjusted timestamp
+        const captionOriginalTime = new Date(caption.timestamp).getTime();
+        const captionAdjustedTime = captionOriginalTime + timeOffset;
+        
+        // Calculate relative time from first caption (in milliseconds)
+        const relativeStart = captionAdjustedTime - firstCaptionAdjustedTime;
+        
+        // Calculate end time
+        let relativeEnd;
+        if (i < displayCaptions.length - 1) {
+          const nextOriginalTime = new Date(displayCaptions[i + 1].timestamp).getTime();
+          const nextAdjustedTime = nextOriginalTime + timeOffset;
+          const duration = Math.min(nextAdjustedTime - captionAdjustedTime, maxDuration);
+          relativeEnd = relativeStart + Math.max(duration, minDuration);
+        } else {
+          // Last caption: use default duration
+          relativeEnd = relativeStart + defaultDuration;
+        }
+        
+        // Format SRT entry - start from the user's set start time, then add relative offset
+        const startSRT = toSRTTime(startTimeMs + relativeStart);
+        const endSRT = toSRTTime(startTimeMs + relativeEnd);
+        
+        // Clean caption text (remove control characters, preserve line breaks if needed)
+        const cleanText = caption.text
+          .replace(/\r\n/g, '\n')
+          .replace(/\r/g, '\n')
+          .replace(/\n{3,}/g, '\n\n'); // Max 2 consecutive newlines
+        
+        srtContent += `${sequenceNumber}\n`;
+        srtContent += `${startSRT} --> ${endSRT}\n`;
+        srtContent += `${cleanText}\n`;
+        srtContent += `\n`; // Blank line between entries
+        
+        sequenceNumber++;
+      }
+      
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.srt"`);
+      return res.send(srtContent);
+    }
+
     // HTML view (default)
     const captionHTML = displayCaptions.length > 0
-      ? displayCaptions.map(c => {
+      ? displayCaptions.map((c, index) => {
           const time = new Date(c.timestamp).toLocaleTimeString();
           const date = new Date(c.timestamp).toLocaleDateString();
           return `
-            <div class="caption-item">
-              <div class="caption-time">
-                <span class="date">${date}</span>
-                <span class="time">${time}</span>
+            <div class="caption-item" data-timestamp="${c.timestamp}" data-index="${index}">
+              <div class="caption-header">
+                <div class="caption-time">
+                  <span class="date">${date}</span>
+                  <span class="time">${time}</span>
+                </div>
+                <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
               </div>
-              <div class="caption-text">${escapeHtml(c.text)}</div>
+              <div class="caption-text" data-original="${escapeHtml(c.text).replace(/"/g, '&quot;')}">${escapeHtml(c.text)}</div>
             </div>
           `;
         }).join('')
@@ -783,6 +1109,59 @@ app.get('/transcript', (req, res) => {
               margin-top: 10px;
               font-size: 11px;
             }
+            .time-adjustment {
+              margin-top: 10px;
+              padding: 10px;
+              background: #1e1e1e;
+              border: 1px solid #3e3e42;
+              border-radius: 3px;
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              flex-wrap: wrap;
+            }
+            .time-adjustment label {
+              color: #9cdcfe;
+              font-size: 12px;
+              font-weight: 600;
+            }
+            .time-adjustment input {
+              background: #3c3c3c;
+              color: #d4d4d4;
+              border: 1px solid #555;
+              padding: 5px 10px;
+              border-radius: 3px;
+              font-family: inherit;
+              font-size: 12px;
+            }
+            .time-adjustment button {
+              background: #0e639c;
+              color: white;
+              border: none;
+              padding: 5px 12px;
+              border-radius: 3px;
+              cursor: pointer;
+              font-size: 11px;
+              font-weight: 600;
+            }
+            .time-adjustment button:hover {
+              background: #1177bb;
+            }
+            .time-adjustment button.reset {
+              background: #c5534b;
+            }
+            .time-adjustment button.reset:hover {
+              background: #d16b64;
+            }
+            .time-offset-indicator {
+              color: #dcdcaa;
+              font-size: 11px;
+              font-weight: 600;
+              display: none;
+            }
+            .time-offset-indicator.active {
+              display: inline;
+            }
             .content {
               background: #252526;
               border: 1px solid #3e3e42;
@@ -796,15 +1175,28 @@ app.get('/transcript', (req, res) => {
               background: #2d2d30;
               border-radius: 3px;
               transition: all 0.2s;
+              position: relative;
             }
             .caption-item:hover {
               background: #333337;
               border-left-color: #5fd4c3;
             }
+            .caption-item.editing {
+              border-left-color: #dcdcaa;
+              background: #3a3a3d;
+            }
+            .caption-item.edited {
+              border-left-color: #dcdcaa;
+            }
+            .caption-header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              margin-bottom: 6px;
+            }
             .caption-time {
               color: #858585;
               font-size: 11px;
-              margin-bottom: 6px;
               font-weight: 500;
             }
             .caption-time .date {
@@ -815,10 +1207,78 @@ app.get('/transcript', (req, res) => {
               color: #9cdcfe;
               font-weight: 600;
             }
+            .edit-btn {
+              background: transparent;
+              border: 1px solid transparent;
+              color: #858585;
+              cursor: pointer;
+              padding: 4px 8px;
+              border-radius: 3px;
+              font-size: 12px;
+              opacity: 0;
+              transition: all 0.2s;
+            }
+            .caption-item:hover .edit-btn {
+              opacity: 1;
+            }
+            .edit-btn:hover {
+              background: #3e3e42;
+              border-color: #4ec9b0;
+              color: #4ec9b0;
+            }
             .caption-text {
               color: #d4d4d4;
               font-size: 14px;
               line-height: 1.6;
+              min-height: 20px;
+            }
+            .caption-text[contenteditable="true"] {
+              background: #1e1e1e;
+              padding: 8px;
+              border: 1px solid #4ec9b0;
+              border-radius: 3px;
+              outline: none;
+            }
+            .caption-text[contenteditable="true"]:focus {
+              border-color: #5fd4c3;
+              box-shadow: 0 0 0 2px rgba(78, 201, 176, 0.2);
+            }
+            .edit-actions {
+              display: flex;
+              gap: 8px;
+              margin-top: 8px;
+              justify-content: flex-end;
+            }
+            .edit-actions button {
+              padding: 6px 12px;
+              border: none;
+              border-radius: 3px;
+              cursor: pointer;
+              font-size: 12px;
+              font-family: inherit;
+              transition: all 0.2s;
+            }
+            .save-btn {
+              background: #4ec9b0;
+              color: #1e1e1e;
+              font-weight: 600;
+            }
+            .save-btn:hover {
+              background: #5fd4c3;
+            }
+            .cancel-btn {
+              background: #3e3e42;
+              color: #d4d4d4;
+            }
+            .cancel-btn:hover {
+              background: #4a4a4f;
+            }
+            .edited-indicator {
+              display: inline-block;
+              margin-left: 8px;
+              color: #dcdcaa;
+              font-size: 10px;
+              font-weight: 600;
             }
             .no-captions {
               color: #858585;
@@ -844,6 +1304,7 @@ app.get('/transcript', (req, res) => {
                 <option value="csv-with">CSV (with timestamps)</option>
                 <option value="csv-without">CSV (no timestamps)</option>
                 <option value="json">JSON</option>
+                <option value="srt">SRT (SubRip subtitles)</option>
               </select>
               <button onclick="location.reload()">🔄 Refresh</button>
               <button onclick="scrollToBottom()">⬇️ Latest</button>
@@ -851,12 +1312,203 @@ app.get('/transcript', (req, res) => {
             </div>
             <div class="stats">
               Showing ${displayCaptions.length.toLocaleString()} of ${captions.length.toLocaleString()} captions
+              ${limit > 0 ? `(limited to last ${limit})` : '(showing all)'}
+              ${captions.length > 10000 ? '<br><span style="color: #dcdcaa;">⚠️ Large file detected. Consider using ?limit=N to view recent captions only.</span>' : ''}
+              <span class="time-offset-indicator" id="timeOffsetIndicator"></span>
+            </div>
+            <div class="time-adjustment">
+              <label for="startTime">⏰ Adjust Start Time:</label>
+              <input type="time" id="startTime" step="1" title="Set start time in 24-hour format (e.g., 00:00:00 for video start, 01:23:45 for 1h 23m 45s into video)" placeholder="HH:MM:SS">
+              <button onclick="applyTimeOffset()">Apply</button>
+              <button class="reset" onclick="resetTimeOffset()">Reset to Actual</button>
+              <span style="font-size: 11px; color: #858585; margin-left: 10px;">
+                💡 Use 24-hour format (00:00:00 to 23:59:59) - perfect for video timecodes
+              </span>
             </div>
           </div>
           <div class="content" id="captionsContainer">
             ${captionHTML}
           </div>
           <script>
+            // Time adjustment state
+            let timeOffsetMs = parseInt(localStorage.getItem('transcriptTimeOffset')) || 0;
+            let startTimeValue = localStorage.getItem('transcriptStartTime') || ''; // Store the start time string (e.g., "00:05:30")
+            let firstCaptionTimestamp = null;
+
+            // Smart autoscroll state
+            let isUserScrolling = false;
+            let autoScrollEnabled = true;
+            let scrollTimeout;
+
+            // Initialize time offset on load
+            function initTimeOffset() {
+              // Get first caption timestamp
+              const firstCaption = document.querySelector('.caption-item');
+              if (firstCaption) {
+                firstCaptionTimestamp = firstCaption.getAttribute('data-timestamp');
+                
+                // Load start time from localStorage if available
+                const savedStartTime = localStorage.getItem('transcriptStartTime');
+                if (savedStartTime) {
+                  startTimeValue = savedStartTime;
+                  document.getElementById('startTime').value = savedStartTime;
+                }
+                
+                // If offset exists, apply it and update indicator
+                if (timeOffsetMs !== 0) {
+                  updateTimeOffsetIndicator();
+                  applyStoredOffset();
+                }
+              }
+            }
+
+            // Apply time offset
+            function applyTimeOffset() {
+              const startTimeInput = document.getElementById('startTime').value;
+              if (!startTimeInput) {
+                alert('Please select a start time');
+                return;
+              }
+
+              if (!firstCaptionTimestamp) {
+                alert('No captions available');
+                return;
+              }
+
+              // Parse the input time (HH:MM:SS)
+              const [hours, minutes, seconds] = startTimeInput.split(':').map(Number);
+              
+              // Create target time using today's date
+              const targetDate = new Date();
+              targetDate.setHours(hours, minutes, seconds || 0, 0);
+              const targetMs = targetDate.getTime();
+
+              // Get first caption's actual timestamp
+              const firstCaptionDate = new Date(firstCaptionTimestamp);
+              const firstCaptionMs = firstCaptionDate.getTime();
+
+              // Calculate offset
+              timeOffsetMs = targetMs - firstCaptionMs;
+
+              // Save to localStorage
+              localStorage.setItem('transcriptTimeOffset', timeOffsetMs);
+              localStorage.setItem('transcriptStartTime', startTimeInput); // Store the start time string
+
+              // Store start time value
+              startTimeValue = startTimeInput;
+
+              // Apply to all captions
+              applyOffsetToAllCaptions();
+              updateTimeOffsetIndicator();
+            }
+
+            // Reset time offset
+            function resetTimeOffset() {
+              timeOffsetMs = 0;
+              startTimeValue = '';
+              localStorage.removeItem('transcriptTimeOffset');
+              localStorage.removeItem('transcriptStartTime');
+              document.getElementById('startTime').value = '';
+              
+              // Restore all original times
+              const captions = document.querySelectorAll('.caption-item');
+              captions.forEach(caption => {
+                const originalTimestamp = caption.getAttribute('data-timestamp');
+                if (originalTimestamp) {
+                  const date = new Date(originalTimestamp);
+                  const timeSpan = caption.querySelector('.caption-time .time');
+                  const dateSpan = caption.querySelector('.caption-time .date');
+                  if (timeSpan) timeSpan.textContent = date.toLocaleTimeString();
+                  if (dateSpan) dateSpan.textContent = date.toLocaleDateString();
+                }
+              });
+
+              // Hide indicator
+              const indicator = document.getElementById('timeOffsetIndicator');
+              indicator.classList.remove('active');
+              indicator.textContent = '';
+            }
+
+            // Apply offset to all captions
+            function applyOffsetToAllCaptions() {
+              const captions = document.querySelectorAll('.caption-item');
+              captions.forEach(caption => {
+                const originalTimestamp = caption.getAttribute('data-timestamp');
+                if (originalTimestamp) {
+                  const originalDate = new Date(originalTimestamp);
+                  const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
+                  
+                  const timeSpan = caption.querySelector('.caption-time .time');
+                  const dateSpan = caption.querySelector('.caption-time .date');
+                  if (timeSpan) timeSpan.textContent = adjustedDate.toLocaleTimeString();
+                  if (dateSpan) dateSpan.textContent = adjustedDate.toLocaleDateString();
+                }
+              });
+            }
+
+            // Apply stored offset on page load
+            function applyStoredOffset() {
+              if (timeOffsetMs !== 0) {
+                applyOffsetToAllCaptions();
+              }
+            }
+
+            // Update time offset indicator
+            function updateTimeOffsetIndicator() {
+              const indicator = document.getElementById('timeOffsetIndicator');
+              if (timeOffsetMs !== 0) {
+                const offsetHours = Math.floor(Math.abs(timeOffsetMs) / 3600000);
+                const offsetMinutes = Math.floor((Math.abs(timeOffsetMs) % 3600000) / 60000);
+                const offsetSeconds = Math.floor((Math.abs(timeOffsetMs) % 60000) / 1000);
+                const sign = timeOffsetMs >= 0 ? '+' : '-';
+                
+                let offsetStr = '';
+                if (offsetHours > 0) offsetStr += \`\${offsetHours}h \`;
+                if (offsetMinutes > 0) offsetStr += \`\${offsetMinutes}m \`;
+                if (offsetSeconds > 0 || offsetStr === '') offsetStr += \`\${offsetSeconds}s\`;
+                
+                indicator.textContent = \` (Time adjusted: \${sign}\${offsetStr})\`;
+                indicator.classList.add('active');
+              } else {
+                indicator.classList.remove('active');
+                indicator.textContent = '';
+              }
+            }
+
+            // Detect if user is at bottom of page
+            function isAtBottom() {
+              const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+              const windowHeight = window.innerHeight;
+              const documentHeight = document.documentElement.scrollHeight;
+              return (documentHeight - (scrollTop + windowHeight)) < 100; // Within 100px of bottom
+            }
+
+            // Smart scroll: only autoscroll if user is at bottom
+            function smartScroll() {
+              if (autoScrollEnabled && isAtBottom()) {
+                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+              }
+            }
+
+            // Track user scrolling
+            window.addEventListener('scroll', () => {
+              clearTimeout(scrollTimeout);
+              
+              // Check if user scrolled away from bottom
+              if (!isAtBottom()) {
+                autoScrollEnabled = false;
+              } else {
+                // User scrolled back to bottom, re-enable autoscroll
+                autoScrollEnabled = true;
+              }
+              
+              // Mark as user scrolling
+              isUserScrolling = true;
+              scrollTimeout = setTimeout(() => {
+                isUserScrolling = false;
+              }, 150);
+            });
+
             // Handle export dropdown
             document.getElementById('exportFormat').addEventListener('change', function(e) {
               const value = e.target.value;
@@ -866,18 +1518,32 @@ app.get('/transcript', (req, res) => {
               switch(value) {
                 case 'txt-with':
                   url = '/transcript?format=txt&timestamp=true';
+                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'txt-without':
                   url = '/transcript?format=txt&timestamp=false';
                   break;
                 case 'csv-with':
                   url = '/transcript?format=csv&timestamp=true';
+                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'csv-without':
                   url = '/transcript?format=csv&timestamp=false';
                   break;
                 case 'json':
                   url = '/transcript?format=json';
+                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
+                  break;
+                case 'srt':
+                  url = '/transcript?format=srt';
+                  // Include time offset if set
+                  if (timeOffsetMs !== 0) {
+                    url += '&offset=' + timeOffsetMs;
+                  }
+                  // Include start time if set (for SRT base time)
+                  if (startTimeValue) {
+                    url += '&startTime=' + encodeURIComponent(startTimeValue);
+                  }
                   break;
               }
 
@@ -890,6 +1556,7 @@ app.get('/transcript', (req, res) => {
             });
 
             function scrollToBottom() {
+              autoScrollEnabled = true;
               window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
             }
 
@@ -905,6 +1572,122 @@ app.get('/transcript', (req, res) => {
               }
             }
 
+            // Inline editing functionality
+            function editCaption(button) {
+              const captionItem = button.closest('.caption-item');
+              const captionText = captionItem.querySelector('.caption-text');
+              const originalText = captionText.getAttribute('data-original');
+              
+              // Don't allow multiple edits at once
+              if (document.querySelector('.caption-item.editing')) {
+                alert('Please finish editing the current caption first.');
+                return;
+              }
+              
+              captionItem.classList.add('editing');
+              captionText.contentEditable = true;
+              captionText.focus();
+              
+              // Select all text
+              const range = document.createRange();
+              range.selectNodeContents(captionText);
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              
+              // Create action buttons
+              const actionsDiv = document.createElement('div');
+              actionsDiv.className = 'edit-actions';
+              actionsDiv.innerHTML = \`
+                <button class="cancel-btn" onclick="cancelEdit(this)">❌ Cancel</button>
+                <button class="save-btn" onclick="saveEdit(this)">💾 Save</button>
+              \`;
+              captionItem.appendChild(actionsDiv);
+              
+              // Hide edit button
+              button.style.display = 'none';
+            }
+
+            function cancelEdit(button) {
+              const captionItem = button.closest('.caption-item');
+              const captionText = captionItem.querySelector('.caption-text');
+              const originalText = captionText.getAttribute('data-original');
+              
+              // Restore original text (decode HTML entities)
+              const textarea = document.createElement('textarea');
+              textarea.innerHTML = originalText;
+              captionText.textContent = textarea.value;
+              
+              captionText.contentEditable = false;
+              captionItem.classList.remove('editing');
+              
+              // Remove action buttons
+              captionItem.querySelector('.edit-actions').remove();
+              
+              // Show edit button again
+              captionItem.querySelector('.edit-btn').style.display = '';
+            }
+
+            function saveEdit(button) {
+              const captionItem = button.closest('.caption-item');
+              const captionText = captionItem.querySelector('.caption-text');
+              const newText = captionText.textContent.trim();
+              const timestamp = captionItem.getAttribute('data-timestamp');
+              
+              if (!newText) {
+                alert('Caption cannot be empty');
+                return;
+              }
+              
+              // Disable buttons during save
+              button.disabled = true;
+              button.textContent = '⏳ Saving...';
+              
+              // Send update to server
+              fetch('/transcript/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timestamp, newText })
+              })
+              .then(res => res.json())
+              .then(data => {
+                if (data.success) {
+                  // Update successful
+                  captionText.contentEditable = false;
+                  captionItem.classList.remove('editing');
+                  captionItem.classList.add('edited');
+                  
+                  // Update data-original
+                  captionText.setAttribute('data-original', newText.replace(/"/g, '&quot;'));
+                  
+                  // Add edited indicator if not already present
+                  if (!captionItem.querySelector('.edited-indicator')) {
+                    const timeDiv = captionItem.querySelector('.caption-time');
+                    const indicator = document.createElement('span');
+                    indicator.className = 'edited-indicator';
+                    indicator.textContent = 'EDITED';
+                    indicator.title = 'This caption has been manually edited';
+                    timeDiv.appendChild(indicator);
+                  }
+                  
+                  // Remove action buttons
+                  captionItem.querySelector('.edit-actions').remove();
+                  
+                  // Show edit button again
+                  captionItem.querySelector('.edit-btn').style.display = '';
+                } else {
+                  alert('Failed to save: ' + (data.error || 'Unknown error'));
+                  button.disabled = false;
+                  button.textContent = '💾 Save';
+                }
+              })
+              .catch(err => {
+                alert('Error saving caption: ' + err.message);
+                button.disabled = false;
+                button.textContent = '💾 Save';
+              });
+            }
+
             // Auto-scroll to bottom on load
             setTimeout(scrollToBottom, 100);
 
@@ -915,30 +1698,41 @@ app.get('/transcript', (req, res) => {
               const caption = JSON.parse(event.data);
               const container = document.getElementById('captionsContainer');
 
+              // Set first caption timestamp if not set
+              if (!firstCaptionTimestamp) {
+                firstCaptionTimestamp = caption.timestamp;
+              }
+
               // Remove "no captions" message if present
               const noCaptions = container.querySelector('.no-captions');
               if (noCaptions) {
                 noCaptions.remove();
               }
 
-              // Create new caption element
-              const time = new Date(caption.timestamp).toLocaleTimeString();
-              const date = new Date(caption.timestamp).toLocaleDateString();
+              // Apply time offset if set
+              const originalDate = new Date(caption.timestamp);
+              const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
+              const time = adjustedDate.toLocaleTimeString();
+              const date = adjustedDate.toLocaleDateString();
 
               const captionDiv = document.createElement('div');
               captionDiv.className = 'caption-item';
+              captionDiv.setAttribute('data-timestamp', caption.timestamp); // Store original timestamp
               captionDiv.innerHTML = \`
-                <div class="caption-time">
-                  <span class="date">\${date}</span>
-                  <span class="time">\${time}</span>
+                <div class="caption-header">
+                  <div class="caption-time">
+                    <span class="date">\${date}</span>
+                    <span class="time">\${time}</span>
+                  </div>
+                  <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
                 </div>
-                <div class="caption-text">\${caption.text}</div>
+                <div class="caption-text" data-original="\${caption.text.replace(/"/g, '&quot;')}">\${caption.text}</div>
               \`;
 
               container.appendChild(captionDiv);
 
-              // Auto-scroll to new caption
-              scrollToBottom();
+              // Smart auto-scroll to new caption (only if user is at bottom)
+              smartScroll();
 
               // Update stats
               const stats = document.querySelector('.stats');
@@ -954,6 +1748,15 @@ app.get('/transcript', (req, res) => {
               console.error('SSE Error:', err);
               // Reconnection is automatic
             };
+
+            // Initialize time offset on page load
+            window.addEventListener('DOMContentLoaded', initTimeOffset);
+            // Also call immediately in case DOMContentLoaded already fired
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', initTimeOffset);
+            } else {
+              initTimeOffset();
+            }
           </script>
         </body>
       </html>
@@ -976,6 +1779,59 @@ app.post('/transcript/clear', (req, res) => {
     captionHistory.length = 0;
     logger.info('Captions cleared by user');
     res.json({ message: 'All captions cleared successfully' });
+  });
+});
+
+/**
+ * Edit caption endpoint
+ */
+app.post('/transcript/edit', (req, res) => {
+  const { timestamp, newText } = req.body;
+  
+  if (!timestamp || !newText) {
+    return res.status(400).json({ success: false, error: 'Missing timestamp or newText' });
+  }
+  
+  // Read the captions file
+  fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
+    if (err) {
+      logger.error('Failed to read captions for edit:', err.message);
+      return res.status(500).json({ success: false, error: 'Failed to read captions file' });
+    }
+    
+    // Parse and update the caption
+    const lines = data.split('\n').filter(line => line.trim());
+    let updated = false;
+    const updatedLines = lines.map(line => {
+      const parts = line.split('\t');
+      if (parts[0] === timestamp) {
+        updated = true;
+        logger.info(`Caption edited: "${parts.slice(1).join('\t')}" → "${newText}"`);
+        return `${timestamp}\t${newText}`;
+      }
+      return line;
+    });
+    
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Caption not found' });
+    }
+    
+    // Write back to file
+    const newContent = updatedLines.join('\n') + '\n';
+    fs.writeFile(CAPTIONS_LOG_FILE, newContent, 'utf8', (err) => {
+      if (err) {
+        logger.error('Failed to save edited caption:', err.message);
+        return res.status(500).json({ success: false, error: 'Failed to save changes' });
+      }
+      
+      // Update in-memory history if present
+      const memoryEntry = captionHistory.find(c => c.timestamp === timestamp);
+      if (memoryEntry) {
+        memoryEntry.text = newText;
+      }
+      
+      res.json({ success: true, message: 'Caption updated successfully' });
+    });
   });
 });
 
@@ -1073,18 +1929,118 @@ server.on('upgrade', (request, socket, head) => {
 wssClients.on('connection', (ws) => {
   console.log('✅ Browser client connected (mic input)');
 
-  // Connect to Soniox if not already connected
-  if (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN) {
-    connectToSoniox();
-  }
+  // Don't auto-connect to Soniox - wait for user to start connection via UI
+  // Send current connection status to the new client
+  setTimeout(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'soniox_status',
+        status: sonioxConnectionState,
+        message: sonioxConnectionState === 'connected' 
+          ? `Connected: ${currentSonioxConfig.sourceLanguage} → ${currentSonioxConfig.targetLanguage}`
+          : sonioxConnectionState === 'connecting'
+          ? 'Connecting...'
+          : 'Not connected'
+      }));
+    }
+  }, 100);
 
   ws.on('message', (message) => {
     try {
-      const data = JSON.parse(message);
+      // Check if message is a string (JSON) or binary
+      let data;
+      if (typeof message === 'string') {
+        try {
+          data = JSON.parse(message);
+        } catch (parseError) {
+          console.warn('⚠️ Received non-JSON string message:', message.toString().substring(0, 100));
+          return; // Skip non-JSON messages
+        }
+      } else if (Buffer.isBuffer(message)) {
+        // Binary message - try to parse as UTF-8 string first (might be JSON)
+        try {
+          const messageStr = message.toString('utf8');
+          data = JSON.parse(messageStr);
+        } catch (parseError) {
+          // If it's not JSON, it might be raw audio data
+          // But we expect audio data to come as JSON with type: 'audio'
+          // So this is unexpected - log once per 1000 messages to avoid spam
+          if (Math.random() < 0.001) {
+            console.warn('⚠️ Received binary message that is not JSON (might be raw audio):', message.length, 'bytes');
+          }
+          return; // Skip non-JSON binary messages
+        }
+      } else {
+        // Try to convert to string and parse
+        try {
+          const messageStr = message.toString();
+          data = JSON.parse(messageStr);
+        } catch (parseError) {
+          console.warn('⚠️ Received unknown message type that cannot be parsed:', typeof message);
+          return;
+        }
+      }
       
-      if (data.type === 'audio') {
+      if (data.type === 'start_soniox') {
+        // Client requesting to start Soniox connection
+        const { apiKey, sourceLanguage, targetLanguage, youtubeCaptionUrl } = data;
+        console.log(`🎬 Client requested to start Soniox connection: ${sourceLanguage} → ${targetLanguage}`);
+        
+        // Validate inputs
+        if (!apiKey || apiKey.trim().length === 0) {
+          ws.send(JSON.stringify({
+            type: 'soniox_status',
+            status: 'error',
+            message: 'API key is required'
+          }));
+          return;
+        }
+        
+        // Update YouTube publisher if URL provided
+        if (youtubeCaptionUrl && youtubeCaptionUrl.trim().length > 0) {
+          youtubePublisher = new YouTubeCaptionPublisher(youtubeCaptionUrl.trim(), YOUTUBE_CAPTIONS_LANGUAGE);
+          console.log('📺 YouTube captions URL updated from client settings');
+          if (youtubePublisher.enabled) {
+            console.log('📺 YouTube captions enabled:', youtubeCaptionUrl.substring(0, 50) + '...');
+          }
+        } else {
+          // Disable YouTube captions if URL is empty
+          youtubePublisher = new YouTubeCaptionPublisher(null, YOUTUBE_CAPTIONS_LANGUAGE);
+          console.log('📺 YouTube captions disabled (no URL provided)');
+        }
+        
+        // Close existing connection if any (properly clean up first)
+        if (sonioxWs) {
+          console.log('ℹ️ Closing existing Soniox connection to start new one');
+          shutdownSonioxConnection();
+          // Wait for proper cleanup before reconnecting
+          setTimeout(() => {
+            connectToSoniox(apiKey, sourceLanguage, targetLanguage);
+          }, 300);
+        } else {
+          // No existing connection, start immediately
+          connectToSoniox(apiKey, sourceLanguage, targetLanguage);
+        }
+      } else if (data.type === 'stop_soniox') {
+        // Client requesting to stop Soniox connection
+        console.log('🛑 Client requested to stop Soniox connection');
+        shutdownSonioxConnection();
+      } else if (data.type === 'get_soniox_status') {
+        // Client requesting current Soniox status
+        ws.send(JSON.stringify({
+          type: 'soniox_status',
+          status: sonioxConnectionState,
+          message: sonioxConnectionState === 'connected' 
+            ? `Connected: ${currentSonioxConfig.sourceLanguage} → ${currentSonioxConfig.targetLanguage}`
+            : sonioxConnectionState === 'connecting'
+            ? 'Connecting...'
+            : 'Not connected'
+        }));
+      } else if (data.type === 'audio') {
         // Forward audio data to Soniox with minimal delay
-        if (sonioxWs && sonioxWs.readyState === WebSocket.OPEN && isSonioxConfigured) {
+        // Allow audio to be sent as long as connection is open, even if config not yet confirmed
+        // Soniox can buffer audio while waiting for configuration
+        if (sonioxWs && sonioxWs.readyState === WebSocket.OPEN) {
           // Convert array of Int16 values to binary Buffer (optimized)
           let audioData;
           try {
@@ -1101,6 +2057,11 @@ wssClients.on('connection', (ws) => {
             if (audioData && audioData.length > 0) {
               sonioxWs.send(audioData, { binary: true });
               lastAudioSentTime = Date.now();
+              
+              // Log occasionally for debugging (every ~100 chunks)
+              if (Math.random() < 0.01) {
+                console.log(`📤 Sending audio chunk: ${audioData.length} bytes (configured: ${isSonioxConfigured})`);
+              }
             }
           } catch (error) {
             // Log errors but don't spam
@@ -1112,11 +2073,13 @@ wssClients.on('connection', (ws) => {
               scheduleReconnect();
             }
           }
-        } else if (!isSonioxConfigured && sonioxWs && sonioxWs.readyState === WebSocket.OPEN) {
-          // Still waiting for configuration, queue is handled by Soniox
         } else if (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN) {
-          // Connection lost, attempt reconnection
-          if (!reconnectTimeout) {
+          // Connection lost, log once
+          if (Math.random() < 0.001) {
+            console.warn('⚠️ Cannot send audio - Soniox not connected');
+          }
+          // Attempt reconnection (only if not manual disconnect)
+          if (!manualDisconnect && !reconnectTimeout) {
             scheduleReconnect();
           }
         }
@@ -1149,17 +2112,47 @@ wssClients.on('connection', (ws) => {
         });
       }
     } catch (error) {
-      console.error('❌ Error processing client message:', error);
+      // Better error logging
+      const errorMessage = error?.message || error?.toString() || 'Unknown error';
+      const errorStack = error?.stack || '';
+      console.error('❌ Error processing client message:', errorMessage);
+      if (errorStack && errorStack.length < 500) {
+        console.error('   Stack:', errorStack);
+      }
+      // Log the raw message if it's not too large
+      try {
+        const messageStr = message.toString();
+        if (messageStr.length < 200) {
+          console.error('   Raw message:', messageStr.substring(0, 200));
+        } else {
+          console.error('   Message type:', typeof message, 'length:', messageStr.length);
+        }
+      } catch (e) {
+        // Ignore errors in error logging
+      }
     }
   });
 
   ws.on('close', () => {
     console.log('🔌 Browser client disconnected');
+    // Remove from client list
+    const index = clientWebSockets.indexOf(ws);
+    if (index > -1) {
+      clientWebSockets.splice(index, 1);
+    }
   });
 
   ws.on('error', (error) => {
     console.error('❌ Browser client error:', error);
+    // Remove from client list on error
+    const index = clientWebSockets.indexOf(ws);
+    if (index > -1) {
+      clientWebSockets.splice(index, 1);
+    }
   });
+
+  // Add to client list
+  clientWebSockets.push(ws);
 });
 
 /**
@@ -1181,42 +2174,191 @@ wssCaptions.on('connection', (ws) => {
 });
 
 /**
- * Connect to Soniox WebSocket
+ * Broadcast Soniox connection status to all connected clients
  */
-function connectToSoniox() {
+function broadcastSonioxStatus(status, message = '') {
+  const statusMessage = JSON.stringify({
+    type: 'soniox_status',
+    status: status, // 'connecting', 'connected', 'disconnected', 'error'
+    message: message
+  });
+
+  console.log(`📢 Broadcasting Soniox status: ${status} to ${clientWebSockets.length} client(s)`);
+
+  // Broadcast to all browser clients
+  let sentCount = 0;
+  clientWebSockets.forEach(ws => {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(statusMessage);
+        sentCount++;
+      } catch (err) {
+        console.error('❌ Error broadcasting status to client:', err.message);
+      }
+    }
+  });
+  
+  if (sentCount === 0 && clientWebSockets.length > 0) {
+    console.warn('⚠️ No clients received status update (all clients may be disconnected)');
+  }
+}
+
+/**
+ * Gracefully shutdown Soniox connection
+ */
+function shutdownSonioxConnection() {
+  console.log('🛑 Shutting down Soniox connection gracefully...');
+  
+  // Set flags FIRST to prevent any race conditions
+  manualDisconnect = true; // Mark as manual disconnect to prevent auto-reconnect
+  isReconnecting = false; // Reset reconnecting flag
+  isSonioxConfigured = false; // Reset config flag
+  sonioxConnectionState = 'disconnected';
+  
+  // Broadcast disconnected status immediately (before closing)
+  broadcastSonioxStatus('disconnected', 'Connection stopped');
+  
+  // Stop heartbeat
+  stopHeartbeat();
+  
+  // Clear reconnect timeout if any
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  
+  // Close WebSocket connection
+  if (sonioxWs) {
+    try {
+      // Close with normal closure code
+      if (sonioxWs.readyState === WebSocket.OPEN || sonioxWs.readyState === WebSocket.CONNECTING) {
+        sonioxWs.close(1000, 'Manual disconnect');
+      }
+    } catch (error) {
+      console.error('❌ Error closing Soniox WebSocket:', error);
+    }
+    // Clear the reference immediately
+    sonioxWs = null;
+  }
+  
+  console.log('✅ Soniox connection shut down successfully');
+}
+
+/**
+ * Connect to Soniox WebSocket with configurable settings
+ */
+function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
+  // Use provided settings or fall back to current config
+  const config = {
+    apiKey: apiKey || currentSonioxConfig.apiKey,
+    sourceLanguage: sourceLanguage || currentSonioxConfig.sourceLanguage,
+    targetLanguage: targetLanguage || currentSonioxConfig.targetLanguage
+  };
+  
+  // Update current config
+  currentSonioxConfig = config;
+  
+  // Validate API key
+  if (!config.apiKey || config.apiKey.trim().length === 0) {
+    console.error('❌ Cannot connect: No API key provided');
+    sonioxConnectionState = 'error';
+    broadcastSonioxStatus('error', 'No API key provided');
+    return;
+  }
+  
   console.log('🔌 Connecting to Soniox...');
+  console.log(`   API Key: ${config.apiKey.substring(0, 10)}... (${config.apiKey.length} chars)`);
+  console.log(`   Source Language: ${config.sourceLanguage}`);
+  console.log(`   Target Language: ${config.targetLanguage}`);
+  
+  manualDisconnect = false; // Reset manual disconnect flag
+  sonioxConnectionState = 'connecting';
+  broadcastSonioxStatus('connecting', 'Establishing connection...');
+
+  // Add connection timeout (30 seconds)
+  let connectionTimeout = setTimeout(() => {
+    if (sonioxWs && sonioxWs.readyState !== WebSocket.OPEN) {
+      console.error('❌ Soniox connection timeout after 30 seconds');
+      sonioxConnectionState = 'error';
+      broadcastSonioxStatus('error', 'Connection timeout - check API key and network');
+      if (sonioxWs) {
+        try {
+          sonioxWs.close();
+        } catch (e) {
+          // Ignore
+        }
+        sonioxWs = null;
+      }
+      // Don't auto-reconnect on timeout - let user retry
+      manualDisconnect = true;
+    }
+  }, 30000);
 
   sonioxWs = new WebSocket(SONIOX_WS_URL);
 
   sonioxWs.on('open', () => {
+    // Clear connection timeout
+    if (connectionTimeout) {
+      clearTimeout(connectionTimeout);
+      connectionTimeout = null;
+    }
+    
     console.log('✅ Connected to Soniox WebSocket');
     reconnectAttempts = 0;
     connectionStartTime = Date.now();
     
     // Send configuration immediately (no delay for minimal latency)
     if (sonioxWs.readyState === WebSocket.OPEN) {
-      const config = {
-        api_key: SONIOX_API_KEY,
+      // Build Soniox configuration
+      const sonioxConfig = {
+        api_key: config.apiKey,
         model: 'stt-rt-v3',
-        language_hints: ['ml'], // Malayalam
         endpoint_detection: true,
         audio_format: 's16le',
         sample_rate: 16000,
-        num_channels: 1,
-        translation: {
-          type: 'one_way',
-          target_language: 'en' // English
-        }
+        num_channels: 1
       };
+      
+      // Handle source language (auto-detect or specific language)
+      if (config.sourceLanguage === 'auto') {
+        // Auto-detect mode - don't specify language_hints
+        console.log('🌐 Auto-detect mode: Soniox will detect language automatically');
+      } else {
+        // Specific language
+        sonioxConfig.language_hints = [config.sourceLanguage];
+      }
+      
+      // Add translation if source and target are different
+      if (config.sourceLanguage !== config.targetLanguage && config.targetLanguage !== 'none') {
+        sonioxConfig.translation = {
+          type: 'one_way',
+          target_language: config.targetLanguage
+        };
+        console.log(`🌍 Translation enabled: ${config.sourceLanguage} → ${config.targetLanguage}`);
+      } else {
+        console.log('📝 Translation disabled (same language or target is "none")');
+      }
 
       try {
-        sonioxWs.send(JSON.stringify(config));
-        isSonioxConfigured = false; // Wait for confirmation
+        sonioxWs.send(JSON.stringify(sonioxConfig));
+        isSonioxConfigured = false; // Will be set true when we receive first tokens
         console.log('📤 Configuration sent to Soniox');
+        console.log('📋 Config:', JSON.stringify(sonioxConfig, null, 2));
+        
+        // Mark as connected immediately - Soniox buffers audio while processing config
+        // This ensures audio isn't dropped and UI shows correct status
+        sonioxConnectionState = 'connected';
+        broadcastSonioxStatus('connected', `Connected: ${config.sourceLanguage} → ${config.targetLanguage}`);
+        console.log('✅ Soniox ready to receive audio');
       } catch (error) {
         console.error('❌ Error sending configuration to Soniox:', error);
+        sonioxConnectionState = 'error';
+        broadcastSonioxStatus('error', 'Failed to send configuration');
         // Retry connection on config error
-        setTimeout(() => connectToSoniox(), 1000);
+        setTimeout(() => {
+          if (!manualDisconnect) connectToSoniox(config.apiKey, config.sourceLanguage, config.targetLanguage);
+        }, 1000);
+        return;
       }
     }
     
@@ -1225,6 +2367,11 @@ function connectToSoniox() {
   });
 
   sonioxWs.on('message', (data) => {
+    // Check if connection is still valid (might be closed during shutdown)
+    if (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN) {
+      return; // Ignore messages after connection closed
+    }
+    
     try {
       // Soniox sends JSON messages
       const message = JSON.parse(data.toString());
@@ -1250,17 +2397,59 @@ function connectToSoniox() {
       // Check if configuration was successful (first non-error message)
       if (!isSonioxConfigured && message.tokens !== undefined) {
         isSonioxConfigured = true;
-        console.log('✅ Soniox configuration confirmed');
+        console.log('✅ Soniox configuration confirmed - receiving transcriptions');
+        // Don't broadcast status again - already marked as connected when config was sent
       }
 
       // Process transcription results
       // Soniox sends tokens with translation_status: 'original' or 'translation'
+      // When source = target (no translation), tokens may not have translation_status
       // Translation often comes in separate messages after original is finalized
       // For LIVE translation, we send both partial and final results
       if (message.tokens && Array.isArray(message.tokens) && message.tokens.length > 0) {
+        // Log first tokens to verify we're receiving them (with details for debugging)
+        if (sonioxWs._messageCount < 10) {
+          console.log(`🔍 Received ${message.tokens.length} tokens from Soniox`);
+          // Log token structure for first few messages to debug
+          if (message.tokens.length > 0) {
+            const sampleToken = message.tokens[0];
+            const hasOriginal = message.tokens.some(t => !t.translation_status || t.translation_status === 'original');
+            const hasTranslation = message.tokens.some(t => t.translation_status === 'translation' || t.translation_status === 'translated');
+            console.log(`   Token analysis:`, {
+              totalTokens: message.tokens.length,
+              hasText: !!sampleToken.text,
+              hasOriginalTokens: hasOriginal,
+              hasTranslatedTokens: hasTranslation,
+              sampleTranslationStatus: sampleToken.translation_status,
+              sampleIsFinal: sampleToken.is_final
+            });
+          }
+        } else if (Math.random() < 0.01) {
+          console.log(`🔍 Received ${message.tokens.length} tokens from Soniox`);
+        }
+        
+        // Check if translation is disabled (source = target)
+        const isTranslationDisabled = currentSonioxConfig.sourceLanguage === currentSonioxConfig.targetLanguage || 
+                                     currentSonioxConfig.targetLanguage === 'none';
+        
         // Separate original and translated tokens
-        const originalTokens = message.tokens.filter(t => t.translation_status === 'original');
-        const translatedTokens = message.tokens.filter(t => t.translation_status === 'translation' || t.translation_status === 'translated');
+        // When source = target, tokens may not have translation_status - treat ALL tokens as original
+        let originalTokens, translatedTokens;
+        if (isTranslationDisabled) {
+          // No translation - all tokens are "original" text
+          originalTokens = message.tokens.filter(t => t.text); // Only tokens with text
+          translatedTokens = []; // No translations
+        } else {
+          // Translation enabled - filter by translation_status
+          originalTokens = message.tokens.filter(t => 
+            !t.translation_status || 
+            t.translation_status === 'original'
+          );
+          translatedTokens = message.tokens.filter(t => 
+            t.translation_status === 'translation' || 
+            t.translation_status === 'translated'
+          );
+        }
         
         // Combine ALL token texts (both partial and final) for live feel
         const originalText = originalTokens.map(t => t.text || '').join('').trim();
@@ -1275,9 +2464,12 @@ function connectToSoniox() {
           // Send translated text (both partial and final for live feel)
           if (translatedText) {
             const isFinal = finalTranslatedTokens.length > 0 && finalTranslatedTokens.length === translatedTokens.length;
-            console.log(isFinal ? '📝 Final' : '📝 Partial', 'translation caption:', translatedText);
+            // Log first few translations to debug startup delay
+            if (sonioxWs._messageCount < 10 || isFinal) {
+              console.log(`📝 ${isFinal ? 'Final' : 'Partial'} translation caption:`, translatedText);
+            }
             
-            // Broadcast translated text (live updates) - optimized
+            // Broadcast translated text immediately (live updates) - don't wait for final
             broadcastToCaptions(translatedText);
             
             // Send to YouTube (only final results)
@@ -1296,12 +2488,12 @@ function connectToSoniox() {
           // If we have translated text, send it (prefer translated over original)
           if (translatedText) {
             const isFinal = finalTranslatedTokens.length > 0 && finalTranslatedTokens.length === translatedTokens.length;
-            // Reduced logging for performance
-            if (isFinal && Math.random() < 0.1) {
-              console.log('📝 Final caption:', translatedText.substring(0, 50) + '...');
+            // Log first few translations to debug startup delay
+            if (sonioxWs._messageCount < 10 || (isFinal && Math.random() < 0.1)) {
+              console.log(`📝 ${isFinal ? 'Final' : 'Partial'} caption:`, translatedText.substring(0, 50) + (translatedText.length > 50 ? '...' : ''));
             }
             
-            // Broadcast translated text (live updates) - optimized
+            // Broadcast translated text immediately (live updates) - don't wait for final
             broadcastToCaptions(translatedText);
             
             // Send to YouTube (only final results)
@@ -1312,73 +2504,158 @@ function connectToSoniox() {
               });
             }
           } else if (originalText) {
-            // No translation yet, but we have original - send it for live feel
-            // (User will see Malayalam until translation arrives)
+            // No translation - send original text
+            // If translation is disabled (source = target), always send original
+            // Otherwise, we wait for translation (don't send original source language)
             const isFinal = finalOriginalTokens.length > 0 && finalOriginalTokens.length === originalTokens.length;
-            console.log(isFinal ? '📝 Final' : '📝 Partial', 'original (waiting for translation):', originalText);
             
-            // For now, we'll wait for translation (don't send original Malayalam)
-            // Uncomment below if you want to show original while waiting for translation:
-            // captionClients.forEach(client => {
-            //   if (client.readyState === WebSocket.OPEN) {
-            //     client.send(originalText);
-            //   }
-            // });
+            if (isTranslationDisabled) {
+              // Translation disabled - send original text immediately
+              if (isFinal) {
+                console.log('📝 Final caption (no translation):', originalText);
+              }
+              
+              // Broadcast original text (live updates)
+              broadcastToCaptions(originalText);
+              
+              // Log and send to YouTube (only final results)
+              if (isFinal) {
+                logCaption(originalText, true);
+                youtubePublisher.publish(originalText).catch(err => {
+                  // Error already logged in publish method
+                });
+              }
+            } else {
+              // Translation enabled - wait for translation
+              // Only log final results to reduce log spam (partial results are too frequent)
+              if (isFinal) {
+                console.log('📝 Final original (waiting for translation):', originalText);
+              }
+              
+              // For now, we'll wait for translation (don't send original source language)
+              // Uncomment below if you want to show original while waiting for translation:
+              // captionClients.forEach(client => {
+              //   if (client.readyState === WebSocket.OPEN) {
+              //     client.send(originalText);
+              //   }
+              // });
+            }
           }
         }
       }
     } catch (error) {
-      console.error('❌ Error processing Soniox message:', error);
+      // Only log if connection is still open (avoid errors during shutdown)
+      if (sonioxWs && sonioxWs.readyState === WebSocket.OPEN) {
+        const errorMessage = error?.message || error?.toString() || 'Unknown error';
+        console.error('❌ Error processing Soniox message:', errorMessage);
+        if (error?.stack && error.stack.length < 500) {
+          console.error('   Stack:', error.stack);
+        }
+      }
+      // Silently ignore errors during shutdown
     }
   });
 
   sonioxWs.on('error', (error) => {
-    console.error('❌ Soniox WebSocket error:', error);
-  });
-
-  sonioxWs.on('error', (error) => {
-    console.error('❌ Soniox WebSocket error:', error.message || error);
+    // Clear connection timeout
+    if (connectionTimeout) {
+      clearTimeout(connectionTimeout);
+      connectionTimeout = null;
+    }
+    
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    console.error('❌ Soniox WebSocket error:', errorMessage);
+    if (error?.code) {
+      console.error('   Error code:', error.code);
+    }
+    if (error?.stack && error.stack.length < 500) {
+      console.error('   Stack:', error.stack);
+    }
+    // Update connection state
+    sonioxConnectionState = 'error';
+    broadcastSonioxStatus('error', `Connection error: ${errorMessage}`);
     // Don't reconnect immediately on error, let close handler do it
   });
 
   sonioxWs.on('close', (code, reason) => {
+    // Clear connection timeout
+    if (connectionTimeout) {
+      clearTimeout(connectionTimeout);
+      connectionTimeout = null;
+    }
+    
     const sessionDuration = connectionStartTime ? ((Date.now() - connectionStartTime) / 1000 / 60).toFixed(1) : 0;
     console.log(`🔌 Soniox WebSocket closed: ${code} ${reason?.toString() || ''} (Session: ${sessionDuration} min)`);
     isSonioxConfigured = false;
     stopHeartbeat();
     
-    // Only reconnect if not a normal closure (1000) or going away (1001)
-    if (code !== 1000 && code !== 1001) {
+    // Update connection state
+    if (manualDisconnect) {
+      sonioxConnectionState = 'disconnected';
+      broadcastSonioxStatus('disconnected', 'Connection stopped by user');
+    } else {
+      sonioxConnectionState = 'disconnected';
+      const reasonStr = reason?.toString() || 'Unknown reason';
+      broadcastSonioxStatus('disconnected', `Connection closed: ${reasonStr} (code: ${code})`);
+    }
+    
+    // Only reconnect if not a normal closure (1000) or going away (1001), and not a manual disconnect
+    if (code !== 1000 && code !== 1001 && !manualDisconnect) {
       scheduleReconnect();
+    } else if (manualDisconnect) {
+      console.log('ℹ️ Manual disconnect - not reconnecting');
     }
   });
 }
 
-/**
- * Schedule reconnection with exponential backoff
- */
+// Update scheduleReconnect to respect manual disconnect
+let isReconnecting = false; // Prevent multiple simultaneous reconnect attempts
+
 function scheduleReconnect() {
+  if (manualDisconnect) {
+    // Only log once per shutdown to avoid spam
+    if (!isReconnecting) {
+      console.log('ℹ️ Manual disconnect active - skipping reconnect');
+      isReconnecting = true; // Set flag to prevent repeated logs
+    }
+    return;
+  }
+  
+  // Prevent multiple simultaneous reconnect attempts
+  if (isReconnecting && reconnectTimeout) {
+    return; // Already reconnecting
+  }
+  
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
   }
   
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.error('❌ Max reconnection attempts reached');
+    sonioxConnectionState = 'error';
+    broadcastSonioxStatus('error', 'Max reconnection attempts reached');
+    isReconnecting = false;
     return;
   }
   
+  isReconnecting = true;
   reconnectAttempts++;
   const delay = Math.min(RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts - 1), 30000); // Max 30s delay
   
   console.log(`🔄 Reconnecting to Soniox in ${(delay/1000).toFixed(1)}s (attempt ${reconnectAttempts})...`);
+  sonioxConnectionState = 'connecting';
+  broadcastSonioxStatus('connecting', `Reconnecting... (attempt ${reconnectAttempts})`);
   
   reconnectTimeout = setTimeout(() => {
     reconnectTimeout = null;
-    if (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN) {
-      connectToSoniox();
+    isReconnecting = false;
+    if (!manualDisconnect && (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN)) {
+      connectToSoniox(currentSonioxConfig.apiKey, currentSonioxConfig.sourceLanguage, currentSonioxConfig.targetLanguage);
     }
   }, delay);
 }
+
 
 /**
  * Start heartbeat to keep connection alive
