@@ -2408,16 +2408,20 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       // For LIVE translation, we send both partial and final results
       if (message.tokens && Array.isArray(message.tokens) && message.tokens.length > 0) {
         // Log first tokens to verify we're receiving them (with details for debugging)
-        if (sonioxWs._messageCount < 5) {
+        if (sonioxWs._messageCount < 10) {
           console.log(`🔍 Received ${message.tokens.length} tokens from Soniox`);
           // Log token structure for first few messages to debug
           if (message.tokens.length > 0) {
             const sampleToken = message.tokens[0];
-            console.log(`   Sample token structure:`, {
+            const hasOriginal = message.tokens.some(t => !t.translation_status || t.translation_status === 'original');
+            const hasTranslation = message.tokens.some(t => t.translation_status === 'translation' || t.translation_status === 'translated');
+            console.log(`   Token analysis:`, {
+              totalTokens: message.tokens.length,
               hasText: !!sampleToken.text,
-              hasTranslationStatus: !!sampleToken.translation_status,
-              translationStatus: sampleToken.translation_status,
-              isFinal: sampleToken.is_final
+              hasOriginalTokens: hasOriginal,
+              hasTranslatedTokens: hasTranslation,
+              sampleTranslationStatus: sampleToken.translation_status,
+              sampleIsFinal: sampleToken.is_final
             });
           }
         } else if (Math.random() < 0.01) {
@@ -2460,12 +2464,12 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
           // Send translated text (both partial and final for live feel)
           if (translatedText) {
             const isFinal = finalTranslatedTokens.length > 0 && finalTranslatedTokens.length === translatedTokens.length;
-            // Only log final results to reduce log spam
-            if (isFinal) {
-              console.log('📝 Final translation caption:', translatedText);
+            // Log first few translations to debug startup delay
+            if (sonioxWs._messageCount < 10 || isFinal) {
+              console.log(`📝 ${isFinal ? 'Final' : 'Partial'} translation caption:`, translatedText);
             }
             
-            // Broadcast translated text (live updates) - optimized
+            // Broadcast translated text immediately (live updates) - don't wait for final
             broadcastToCaptions(translatedText);
             
             // Send to YouTube (only final results)
@@ -2484,12 +2488,12 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
           // If we have translated text, send it (prefer translated over original)
           if (translatedText) {
             const isFinal = finalTranslatedTokens.length > 0 && finalTranslatedTokens.length === translatedTokens.length;
-            // Reduced logging for performance
-            if (isFinal && Math.random() < 0.1) {
-              console.log('📝 Final caption:', translatedText.substring(0, 50) + '...');
+            // Log first few translations to debug startup delay
+            if (sonioxWs._messageCount < 10 || (isFinal && Math.random() < 0.1)) {
+              console.log(`📝 ${isFinal ? 'Final' : 'Partial'} caption:`, translatedText.substring(0, 50) + (translatedText.length > 50 ? '...' : ''));
             }
             
-            // Broadcast translated text (live updates) - optimized
+            // Broadcast translated text immediately (live updates) - don't wait for final
             broadcastToCaptions(translatedText);
             
             // Send to YouTube (only final results)
