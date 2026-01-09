@@ -732,6 +732,157 @@
           <div class="settings-title">Caption Display Settings</div>
         </div>
         <div class="settings-content" id="settingsContent">
+        <!-- Soniox Connection Settings -->
+        <div class="settings-section">
+          <div class="settings-section-title">🔌 Soniox Connection</div>
+          
+          <!-- Connection Status -->
+          <div style="margin-bottom: 15px; padding: 12px; background: rgba(4, 13, 18, 0.6); border-radius: 8px; border: 1px solid rgba(92, 131, 116, 0.3);">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div id="sonioxStatusDot" style="width: 10px; height: 10px; border-radius: 50%; background: #666;"></div>
+                <span id="sonioxStatusText" style="font-size: 13px; font-weight: 500;">Not Connected</span>
+              </div>
+              <span id="sonioxUptimeText" style="font-size: 11px; opacity: 0.7;"></span>
+            </div>
+            <div style="font-size: 11px; opacity: 0.6;" id="sonioxLanguageInfo">Ready to connect</div>
+          </div>
+
+          <div class="settings-grid">
+            <div class="setting-item full-width">
+              <label class="setting-label">🔑 API Key</label>
+              <div style="position: relative;">
+                <input type="password" id="sonioxApiKey" class="setting-input" placeholder="Enter Soniox API key" style="padding-right: 40px;">
+                <button id="toggleApiKeyVisibility" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #93B1A6; cursor: pointer; font-size: 16px; opacity: 0.6; padding: 4px 8px;" title="Show/Hide API key">👁️</button>
+              </div>
+              <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">
+                Get your API key from <a href="https://soniox.com" target="_blank" style="color: #5C8374;">soniox.com</a>
+              </div>
+            </div>
+            
+            <div class="setting-item full-width">
+              <label class="setting-label">📺 YouTube Captions URL (Optional)</label>
+              <input type="text" id="youtubeCaptionUrl" class="setting-input" placeholder="http://upload.youtube.com/closedcaption?cid=..." style="font-family: monospace; font-size: 12px;">
+              <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">
+                Get this URL from your YouTube Live Stream settings. Leave empty to disable YouTube captions.
+              </div>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">🎤 Source Language</label>
+              <select id="sourceLanguage" class="setting-select">
+                <option value="auto">🌐 Auto-Detect</option>
+                <optgroup label="── Primary ──">
+                  <option value="hi">🇮🇳 Hindi (हिंदी)</option>
+                  <option value="en">🇬🇧 English</option>
+                  <option value="kn">🇮🇳 Kannada (ಕನ್ನಡ)</option>
+                  <option value="ml" selected>🇮🇳 Malayalam (മലയാളം)</option>
+                </optgroup>
+                <optgroup label="── Indian Languages ──">
+                  <option value="ta">🇮🇳 Tamil (தமிழ்)</option>
+                  <option value="te">🇮🇳 Telugu (తెలుగు)</option>
+                  <option value="bn">🇮🇳 Bengali (বাংলা)</option>
+                  <option value="gu">🇮🇳 Gujarati (ગુજરાતી)</option>
+                  <option value="mr">🇮🇳 Marathi (मराठी)</option>
+                  <option value="pa">🇮🇳 Punjabi (ਪੰਜਾਬੀ)</option>
+                  <option value="ur">🇮🇳 Urdu (اردو)</option>
+                </optgroup>
+                <optgroup label="── Other Languages ──">
+                  <option value="es">🇪🇸 Spanish (Español)</option>
+                  <option value="fr">🇫🇷 French (Français)</option>
+                  <option value="de">🇩🇪 German (Deutsch)</option>
+                  <option value="it">🇮🇹 Italian (Italiano)</option>
+                  <option value="pt">🇵🇹 Portuguese (Português)</option>
+                  <option value="ru">🇷🇺 Russian (Русский)</option>
+                  <option value="ja">🇯🇵 Japanese (日本語)</option>
+                  <option value="ko">🇰🇷 Korean (한국어)</option>
+                  <option value="zh">🇨🇳 Chinese (中文)</option>
+                  <option value="ar">🇸🇦 Arabic (العربية)</option>
+                  <option value="tr">🇹🇷 Turkish (Türkçe)</option>
+                  <option value="vi">🇻🇳 Vietnamese (Tiếng Việt)</option>
+                  <option value="th">🇹🇭 Thai (ไทย)</option>
+                  <option value="id">🇮🇩 Indonesian (Bahasa)</option>
+                  <option value="nl">🇳🇱 Dutch (Nederlands)</option>
+                  <option value="pl">🇵🇱 Polish (Polski)</option>
+                  <option value="sv">🇸🇪 Swedish (Svenska)</option>
+                  <option value="da">🇩🇰 Danish (Dansk)</option>
+                  <option value="fi">🇫🇮 Finnish (Suomi)</option>
+                  <option value="no">🇳🇴 Norwegian (Norsk)</option>
+                  <option value="cs">🇨🇿 Czech (Čeština)</option>
+                  <option value="hu">🇭🇺 Hungarian (Magyar)</option>
+                  <option value="ro">🇷🇴 Romanian (Română)</option>
+                  <option value="uk">🇺🇦 Ukrainian (Українська)</option>
+                  <option value="el">🇬🇷 Greek (Ελληνικά)</option>
+                  <option value="he">🇮🇱 Hebrew (עברית)</option>
+                </optgroup>
+              </select>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">🌍 Target Language</label>
+              <select id="targetLanguage" class="setting-select">
+                <optgroup label="── Primary ──">
+                  <option value="hi">🇮🇳 Hindi (हिंदी)</option>
+                  <option value="en" selected>🇬🇧 English</option>
+                  <option value="kn">🇮🇳 Kannada (ಕನ್ನಡ)</option>
+                  <option value="ml">🇮🇳 Malayalam (മലയാളം)</option>
+                </optgroup>
+                <optgroup label="── Indian Languages ──">
+                  <option value="ta">🇮🇳 Tamil (தமிழ்)</option>
+                  <option value="te">🇮🇳 Telugu (తెలుగు)</option>
+                  <option value="bn">🇮🇳 Bengali (বাংলা)</option>
+                  <option value="gu">🇮🇳 Gujarati (ગુજરાતી)</option>
+                  <option value="mr">🇮🇳 Marathi (मराठी)</option>
+                  <option value="pa">🇮🇳 Punjabi (ਪੰਜਾਬੀ)</option>
+                  <option value="ur">🇮🇳 Urdu (اردو)</option>
+                </optgroup>
+                <optgroup label="── Other Languages ──">
+                  <option value="es">🇪🇸 Spanish (Español)</option>
+                  <option value="fr">🇫🇷 French (Français)</option>
+                  <option value="de">🇩🇪 German (Deutsch)</option>
+                  <option value="it">🇮🇹 Italian (Italiano)</option>
+                  <option value="pt">🇵🇹 Portuguese (Português)</option>
+                  <option value="ru">🇷🇺 Russian (Русский)</option>
+                  <option value="ja">🇯🇵 Japanese (日本語)</option>
+                  <option value="ko">🇰🇷 Korean (한국어)</option>
+                  <option value="zh">🇨🇳 Chinese (中文)</option>
+                  <option value="ar">🇸🇦 Arabic (العربية)</option>
+                  <option value="tr">🇹🇷 Turkish (Türkçe)</option>
+                  <option value="vi">🇻🇳 Vietnamese (Tiếng Việt)</option>
+                  <option value="th">🇹🇭 Thai (ไทย)</option>
+                  <option value="id">🇮🇩 Indonesian (Bahasa)</option>
+                  <option value="nl">🇳🇱 Dutch (Nederlands)</option>
+                  <option value="pl">🇵🇱 Polish (Polski)</option>
+                  <option value="sv">🇸🇪 Swedish (Svenska)</option>
+                  <option value="da">🇩🇰 Danish (Dansk)</option>
+                  <option value="fi">🇫🇮 Finnish (Suomi)</option>
+                  <option value="no">🇳🇴 Norwegian (Norsk)</option>
+                  <option value="cs">🇨🇿 Czech (Čeština)</option>
+                  <option value="hu">🇭🇺 Hungarian (Magyar)</option>
+                  <option value="ro">🇷🇴 Romanian (Română)</option>
+                  <option value="uk">🇺🇦 Ukrainian (Українська)</option>
+                  <option value="el">🇬🇷 Greek (Ελληνικά)</option>
+                  <option value="he">🇮🇱 Hebrew (עברית)</option>
+                </optgroup>
+              </select>
+            </div>
+          </div>
+
+          <!-- Connection Control Buttons -->
+          <div style="display: flex; gap: 10px; margin-top: 15px;">
+            <button id="startSonioxConnection" style="flex: 1; padding: 12px; background: #5C8374; color: #040D12; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; text-transform: uppercase; font-size: 13px;">
+              ▶ Start Connection
+            </button>
+            <button id="stopSonioxConnection" disabled style="flex: 1; padding: 12px; background: rgba(147, 177, 166, 0.2); color: #93B1A6; border: 1px solid #5C8374; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; text-transform: uppercase; font-size: 13px;">
+              ⏹ Stop Connection
+            </button>
+          </div>
+
+          <div style="font-size: 11px; opacity: 0.7; margin-top: 8px; line-height: 1.4;">
+            ℹ️ Connection must be started before audio recording. Settings can be changed anytime and will take effect on next connection.
+          </div>
+        </div>
+
         <!-- Layout Settings -->
         <div class="settings-section">
           <div class="settings-section-title">Layout</div>
@@ -1005,6 +1156,9 @@
         updateStatus('Connected to server', 'connected');
         startBtn.disabled = false;
         
+        // Set up Soniox status handler now that ws is connected
+        setupSonioxStatusHandler();
+        
         // Request configuration
         ws.send(JSON.stringify({ type: 'config' }));
         
@@ -1015,6 +1169,11 @@
             settings: currentSettings
           }));
         }
+        
+        // Request current Soniox connection status
+        setTimeout(() => {
+          ws.send(JSON.stringify({ type: 'get_soniox_status' }));
+        }, 500);
       };
 
       ws.onmessage = (event) => {
@@ -1337,8 +1496,241 @@
       // Initialize all setting inputs
       initializeSettingInputs();
       
+      // Initialize Soniox connection controls
+      initializeSonioxControls();
+      
       // Load saved settings from localStorage
       loadSettings();
+    }
+
+    /**
+     * Initialize Soniox connection controls
+     */
+    function initializeSonioxControls() {
+      const apiKeyInput = document.getElementById('sonioxApiKey');
+      const toggleVisibilityBtn = document.getElementById('toggleApiKeyVisibility');
+      const youtubeUrlInput = document.getElementById('youtubeCaptionUrl');
+      const sourceLanguage = document.getElementById('sourceLanguage');
+      const targetLanguage = document.getElementById('targetLanguage');
+      const startBtn = document.getElementById('startSonioxConnection');
+      const stopBtn = document.getElementById('stopSonioxConnection');
+      const statusDot = document.getElementById('sonioxStatusDot');
+      const statusText = document.getElementById('sonioxStatusText');
+      const languageInfo = document.getElementById('sonioxLanguageInfo');
+      const uptimeText = document.getElementById('sonioxUptimeText');
+
+      let connectionStartTime = null;
+      let uptimeInterval = null;
+
+      // Load saved Soniox settings
+      const savedApiKey = localStorage.getItem('sonioxApiKey') || '';
+      const savedYoutubeUrl = localStorage.getItem('youtubeCaptionUrl') || '';
+      const savedSourceLang = localStorage.getItem('sonioxSourceLanguage') || 'ml';
+      const savedTargetLang = localStorage.getItem('sonioxTargetLanguage') || 'en';
+
+      apiKeyInput.value = savedApiKey;
+      youtubeUrlInput.value = savedYoutubeUrl;
+      sourceLanguage.value = savedSourceLang;
+      targetLanguage.value = savedTargetLang;
+
+      // Update language info display
+      function updateLanguageInfo() {
+        const sourceLang = sourceLanguage.options[sourceLanguage.selectedIndex].text;
+        const targetLang = targetLanguage.options[targetLanguage.selectedIndex].text;
+        languageInfo.textContent = `${sourceLang} → ${targetLang}`;
+      }
+      updateLanguageInfo();
+
+      // Toggle API key visibility
+      toggleVisibilityBtn.addEventListener('click', () => {
+        if (apiKeyInput.type === 'password') {
+          apiKeyInput.type = 'text';
+          toggleVisibilityBtn.textContent = '🙈';
+        } else {
+          apiKeyInput.type = 'password';
+          toggleVisibilityBtn.textContent = '👁️';
+        }
+      });
+
+      // Save settings when changed
+      apiKeyInput.addEventListener('change', () => {
+        localStorage.setItem('sonioxApiKey', apiKeyInput.value.trim());
+      });
+
+      youtubeUrlInput.addEventListener('change', () => {
+        localStorage.setItem('youtubeCaptionUrl', youtubeUrlInput.value.trim());
+      });
+
+      sourceLanguage.addEventListener('change', () => {
+        localStorage.setItem('sonioxSourceLanguage', sourceLanguage.value);
+        updateLanguageInfo();
+      });
+
+      targetLanguage.addEventListener('change', () => {
+        localStorage.setItem('sonioxTargetLanguage', targetLanguage.value);
+        updateLanguageInfo();
+      });
+
+      // Update uptime display
+      function updateUptime() {
+        if (!connectionStartTime) {
+          uptimeText.textContent = '';
+          return;
+        }
+        const elapsed = Date.now() - connectionStartTime;
+        const minutes = Math.floor(elapsed / 60000);
+        const seconds = Math.floor((elapsed % 60000) / 1000);
+        uptimeText.textContent = `Uptime: ${minutes}m ${seconds}s`;
+      }
+
+      // Start Soniox connection
+      startBtn.addEventListener('click', () => {
+        const apiKey = apiKeyInput.value.trim();
+        if (!apiKey) {
+          alert('⚠️ Please enter a valid Soniox API key');
+          apiKeyInput.focus();
+          return;
+        }
+
+        const sourceLang = sourceLanguage.value;
+        const targetLang = targetLanguage.value;
+        const youtubeUrl = youtubeUrlInput.value.trim();
+
+        // Send connection command to server
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'start_soniox',
+            apiKey: apiKey,
+            sourceLanguage: sourceLang,
+            targetLanguage: targetLang,
+            youtubeCaptionUrl: youtubeUrl || null // Send null if empty
+          }));
+
+          // Update UI
+          statusDot.style.background = '#f39c12';
+          statusDot.style.animation = 'pulse 1s infinite';
+          statusText.textContent = 'Connecting...';
+          startBtn.disabled = true;
+          stopBtn.disabled = false;
+          connectionStartTime = Date.now();
+          
+          // Start uptime counter
+          if (uptimeInterval) clearInterval(uptimeInterval);
+          uptimeInterval = setInterval(updateUptime, 1000);
+          
+          console.log('🔌 Starting Soniox connection:', { sourceLang, targetLang });
+        } else {
+          alert('⚠️ Not connected to server. Please refresh the page and try again.');
+        }
+      });
+
+      // Stop Soniox connection
+      stopBtn.addEventListener('click', () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'stop_soniox'
+          }));
+
+          // Update UI
+          statusDot.style.background = '#666';
+          statusDot.style.animation = 'none';
+          statusText.textContent = 'Disconnecting...';
+          stopBtn.disabled = true;
+          
+          console.log('🔌 Stopping Soniox connection');
+        }
+      });
+
+      // Set up Soniox status handler (called after WebSocket connects)
+      function setupSonioxStatusHandler() {
+        if (!ws) return;
+        
+        // Store the original handler
+        const originalOnMessage = ws.onmessage;
+        
+        // Create new handler that processes both regular messages and status updates
+        ws.onmessage = (event) => {
+          // First, handle Soniox status updates
+          try {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'soniox_status') {
+              const status = data.status;
+              console.log('📡 Received Soniox status update:', status, data.message || '');
+              
+              switch (status) {
+                case 'connecting':
+                  statusDot.style.background = '#f39c12';
+                  statusDot.style.animation = 'pulse 1s infinite';
+                  statusText.textContent = 'Connecting...';
+                  startBtn.disabled = true;
+                  stopBtn.disabled = false;
+                  break;
+                  
+                case 'connected':
+                  statusDot.style.background = '#27ae60';
+                  statusDot.style.animation = 'pulse 2s infinite';
+                  statusText.textContent = 'Connected';
+                  startBtn.disabled = true;
+                  stopBtn.disabled = false;
+                  if (!connectionStartTime) connectionStartTime = Date.now();
+                  if (!uptimeInterval) uptimeInterval = setInterval(updateUptime, 1000);
+                  console.log('✅ Soniox status updated: Connected');
+                  break;
+                  
+                case 'disconnected':
+                  statusDot.style.background = '#666';
+                  statusDot.style.animation = 'none';
+                  statusText.textContent = 'Not Connected';
+                  startBtn.disabled = false;
+                  stopBtn.disabled = true;
+                  connectionStartTime = null;
+                  uptimeText.textContent = '';
+                  if (uptimeInterval) {
+                    clearInterval(uptimeInterval);
+                    uptimeInterval = null;
+                  }
+                  console.log('🔌 Soniox status updated: Disconnected');
+                  break;
+                  
+                case 'error':
+                  statusDot.style.background = '#e74c3c';
+                  statusDot.style.animation = 'pulse 0.5s infinite';
+                  statusText.textContent = 'Error';
+                  startBtn.disabled = false;
+                  stopBtn.disabled = true;
+                  connectionStartTime = null;
+                  uptimeText.textContent = '';
+                  if (uptimeInterval) {
+                    clearInterval(uptimeInterval);
+                    uptimeInterval = null;
+                  }
+                  if (data.message) {
+                    languageInfo.textContent = `Error: ${data.message}`;
+                    setTimeout(() => updateLanguageInfo(), 5000);
+                  }
+                  console.log('❌ Soniox status updated: Error', data.message || '');
+                  break;
+              }
+              
+              // Update language info if provided
+              if (data.message && data.status === 'connected') {
+                languageInfo.textContent = data.message;
+              }
+              
+              // Don't process further - status message handled
+              return;
+            }
+          } catch (e) {
+            // Not JSON or not a status message, continue to original handler
+          }
+          
+          // Call original handler for other message types
+          if (originalOnMessage) {
+            originalOnMessage(event);
+          }
+        };
+      }
     }
 
     /**
