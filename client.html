@@ -1086,6 +1086,16 @@
     let ws = null;
     let audioContext = null;
     let mediaStream = null;
+    
+    // Soniox UI element references (set up in initializeSonioxControls)
+    let sonioxStatusDot = null;
+    let sonioxStatusText = null;
+    let sonioxStartBtn = null;
+    let sonioxStopBtn = null;
+    let sonioxLanguageInfo = null;
+    let sonioxUptimeText = null;
+    let sonioxConnectionStartTime = null;
+    let sonioxUptimeInterval = null;
     let processor = null;
     let analyser = null;
     let isRecording = false;
@@ -1151,13 +1161,110 @@
 
       ws = new WebSocket(wsUrl);
 
+      // Set up message handler BEFORE opening connection
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // Handle Soniox status updates FIRST
+          if (data.type === 'soniox_status' && sonioxStatusDot && sonioxStatusText) {
+            const status = data.status;
+            console.log('📡 Received Soniox status update:', status, data.message || '');
+            
+            switch (status) {
+              case 'connecting':
+                sonioxStatusDot.style.background = '#f39c12';
+                sonioxStatusDot.style.animation = 'pulse 1s infinite';
+                sonioxStatusText.textContent = 'Connecting...';
+                if (sonioxStartBtn) sonioxStartBtn.disabled = true;
+                if (sonioxStopBtn) sonioxStopBtn.disabled = false;
+                break;
+                
+              case 'connected':
+                sonioxStatusDot.style.background = '#27ae60';
+                sonioxStatusDot.style.animation = 'pulse 2s infinite';
+                sonioxStatusText.textContent = 'Connected';
+                if (sonioxStartBtn) sonioxStartBtn.disabled = true;
+                if (sonioxStopBtn) sonioxStopBtn.disabled = false;
+                if (!sonioxConnectionStartTime) sonioxConnectionStartTime = Date.now();
+                if (!sonioxUptimeInterval) {
+                  sonioxUptimeInterval = setInterval(() => {
+                    if (!sonioxConnectionStartTime || !sonioxUptimeText) return;
+                    const elapsed = Date.now() - sonioxConnectionStartTime;
+                    const minutes = Math.floor(elapsed / 60000);
+                    const seconds = Math.floor((elapsed % 60000) / 1000);
+                    sonioxUptimeText.textContent = `Uptime: ${minutes}m ${seconds}s`;
+                  }, 1000);
+                }
+                console.log('✅ Soniox status updated: Connected');
+                break;
+                
+              case 'disconnected':
+                sonioxStatusDot.style.background = '#666';
+                sonioxStatusDot.style.animation = 'none';
+                sonioxStatusText.textContent = 'Not Connected';
+                if (sonioxStartBtn) sonioxStartBtn.disabled = false;
+                if (sonioxStopBtn) sonioxStopBtn.disabled = true;
+                sonioxConnectionStartTime = null;
+                if (sonioxUptimeText) sonioxUptimeText.textContent = '';
+                if (sonioxUptimeInterval) {
+                  clearInterval(sonioxUptimeInterval);
+                  sonioxUptimeInterval = null;
+                }
+                console.log('🔌 Soniox status updated: Disconnected');
+                break;
+                
+              case 'error':
+                sonioxStatusDot.style.background = '#e74c3c';
+                sonioxStatusDot.style.animation = 'pulse 0.5s infinite';
+                sonioxStatusText.textContent = 'Error';
+                if (sonioxStartBtn) sonioxStartBtn.disabled = false;
+                if (sonioxStopBtn) sonioxStopBtn.disabled = true;
+                sonioxConnectionStartTime = null;
+                if (sonioxUptimeText) sonioxUptimeText.textContent = '';
+                if (sonioxUptimeInterval) {
+                  clearInterval(sonioxUptimeInterval);
+                  sonioxUptimeInterval = null;
+                }
+                if (data.message && sonioxLanguageInfo) {
+                  sonioxLanguageInfo.textContent = `Error: ${data.message}`;
+                  setTimeout(() => {
+                    if (sonioxLanguageInfo) {
+                      const sourceLang = document.getElementById('sourceLanguage')?.value || 'auto';
+                      const targetLang = document.getElementById('targetLanguage')?.value || 'none';
+                      sonioxLanguageInfo.textContent = `${sourceLang} → ${targetLang}`;
+                    }
+                  }, 5000);
+                }
+                console.log('❌ Soniox status updated: Error', data.message || '');
+                break;
+            }
+            
+            // Update language info if provided
+            if (data.message && data.status === 'connected' && sonioxLanguageInfo) {
+              sonioxLanguageInfo.textContent = data.message;
+            }
+            
+            // Status handled, don't process further
+            return;
+          }
+          
+          // Handle config messages
+          if (data.type === 'config') {
+            console.log('📋 Server config:', data);
+            sampleRateEl.textContent = data.sampleRate + ' Hz';
+            channelsEl.textContent = data.channels;
+            formatEl.textContent = data.format;
+          }
+        } catch (e) {
+          console.log('📨 Server message:', event.data);
+        }
+      };
+
       ws.onopen = () => {
         console.log('✅ Connected to server');
         updateStatus('Connected to server', 'connected');
         startBtn.disabled = false;
-        
-        // Set up Soniox status handler now that ws is connected
-        setupSonioxStatusHandler();
         
         // Request configuration
         ws.send(JSON.stringify({ type: 'config' }));
@@ -1174,20 +1281,6 @@
         setTimeout(() => {
           ws.send(JSON.stringify({ type: 'get_soniox_status' }));
         }, 500);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'config') {
-            console.log('📋 Server config:', data);
-            sampleRateEl.textContent = data.sampleRate + ' Hz';
-            channelsEl.textContent = data.channels;
-            formatEl.textContent = data.format;
-          }
-        } catch (e) {
-          console.log('📨 Server message:', event.data);
-        }
       };
 
       ws.onerror = (error) => {
@@ -1514,13 +1607,14 @@
       const targetLanguage = document.getElementById('targetLanguage');
       const startBtn = document.getElementById('startSonioxConnection');
       const stopBtn = document.getElementById('stopSonioxConnection');
-      const statusDot = document.getElementById('sonioxStatusDot');
-      const statusText = document.getElementById('sonioxStatusText');
-      const languageInfo = document.getElementById('sonioxLanguageInfo');
-      const uptimeText = document.getElementById('sonioxUptimeText');
-
-      let connectionStartTime = null;
-      let uptimeInterval = null;
+      
+      // Store references in global scope for WebSocket message handler
+      sonioxStatusDot = document.getElementById('sonioxStatusDot');
+      sonioxStatusText = document.getElementById('sonioxStatusText');
+      sonioxStartBtn = startBtn;
+      sonioxStopBtn = stopBtn;
+      sonioxLanguageInfo = document.getElementById('sonioxLanguageInfo');
+      sonioxUptimeText = document.getElementById('sonioxUptimeText');
 
       // Load saved Soniox settings
       const savedApiKey = localStorage.getItem('sonioxApiKey') || '';
@@ -1535,9 +1629,10 @@
 
       // Update language info display
       function updateLanguageInfo() {
+        if (!sonioxLanguageInfo) return;
         const sourceLang = sourceLanguage.options[sourceLanguage.selectedIndex].text;
         const targetLang = targetLanguage.options[targetLanguage.selectedIndex].text;
-        languageInfo.textContent = `${sourceLang} → ${targetLang}`;
+        sonioxLanguageInfo.textContent = `${sourceLang} → ${targetLang}`;
       }
       updateLanguageInfo();
 
@@ -1571,17 +1666,7 @@
         updateLanguageInfo();
       });
 
-      // Update uptime display
-      function updateUptime() {
-        if (!connectionStartTime) {
-          uptimeText.textContent = '';
-          return;
-        }
-        const elapsed = Date.now() - connectionStartTime;
-        const minutes = Math.floor(elapsed / 60000);
-        const seconds = Math.floor((elapsed % 60000) / 1000);
-        uptimeText.textContent = `Uptime: ${minutes}m ${seconds}s`;
-      }
+      // Update uptime display (now handled inline in status handler and start button)
 
       // Start Soniox connection
       startBtn.addEventListener('click', () => {
@@ -1606,17 +1691,25 @@
             youtubeCaptionUrl: youtubeUrl || null // Send null if empty
           }));
 
-          // Update UI
-          statusDot.style.background = '#f39c12';
-          statusDot.style.animation = 'pulse 1s infinite';
-          statusText.textContent = 'Connecting...';
-          startBtn.disabled = true;
-          stopBtn.disabled = false;
-          connectionStartTime = Date.now();
+          // Update UI immediately (will be overridden by server status)
+          if (sonioxStatusDot) {
+            sonioxStatusDot.style.background = '#f39c12';
+            sonioxStatusDot.style.animation = 'pulse 1s infinite';
+          }
+          if (sonioxStatusText) sonioxStatusText.textContent = 'Connecting...';
+          if (startBtn) startBtn.disabled = true;
+          if (stopBtn) stopBtn.disabled = false;
+          sonioxConnectionStartTime = Date.now();
           
           // Start uptime counter
-          if (uptimeInterval) clearInterval(uptimeInterval);
-          uptimeInterval = setInterval(updateUptime, 1000);
+          if (sonioxUptimeInterval) clearInterval(sonioxUptimeInterval);
+          sonioxUptimeInterval = setInterval(() => {
+            if (!sonioxConnectionStartTime || !sonioxUptimeText) return;
+            const elapsed = Date.now() - sonioxConnectionStartTime;
+            const minutes = Math.floor(elapsed / 60000);
+            const seconds = Math.floor((elapsed % 60000) / 1000);
+            sonioxUptimeText.textContent = `Uptime: ${minutes}m ${seconds}s`;
+          }, 1000);
           
           console.log('🔌 Starting Soniox connection:', { sourceLang, targetLang });
         } else {
@@ -1631,106 +1724,18 @@
             type: 'stop_soniox'
           }));
 
-          // Update UI
-          statusDot.style.background = '#666';
-          statusDot.style.animation = 'none';
-          statusText.textContent = 'Disconnecting...';
-          stopBtn.disabled = true;
+          // Update UI immediately (will be overridden by server status)
+          if (sonioxStatusDot) {
+            sonioxStatusDot.style.background = '#666';
+            sonioxStatusDot.style.animation = 'none';
+          }
+          if (sonioxStatusText) sonioxStatusText.textContent = 'Disconnecting...';
+          if (stopBtn) stopBtn.disabled = true;
           
           console.log('🔌 Stopping Soniox connection');
         }
       });
 
-      // Set up Soniox status handler (called after WebSocket connects)
-      function setupSonioxStatusHandler() {
-        if (!ws) return;
-        
-        // Store the original handler
-        const originalOnMessage = ws.onmessage;
-        
-        // Create new handler that processes both regular messages and status updates
-        ws.onmessage = (event) => {
-          // First, handle Soniox status updates
-          try {
-            const data = JSON.parse(event.data);
-            
-            if (data.type === 'soniox_status') {
-              const status = data.status;
-              console.log('📡 Received Soniox status update:', status, data.message || '');
-              
-              switch (status) {
-                case 'connecting':
-                  statusDot.style.background = '#f39c12';
-                  statusDot.style.animation = 'pulse 1s infinite';
-                  statusText.textContent = 'Connecting...';
-                  startBtn.disabled = true;
-                  stopBtn.disabled = false;
-                  break;
-                  
-                case 'connected':
-                  statusDot.style.background = '#27ae60';
-                  statusDot.style.animation = 'pulse 2s infinite';
-                  statusText.textContent = 'Connected';
-                  startBtn.disabled = true;
-                  stopBtn.disabled = false;
-                  if (!connectionStartTime) connectionStartTime = Date.now();
-                  if (!uptimeInterval) uptimeInterval = setInterval(updateUptime, 1000);
-                  console.log('✅ Soniox status updated: Connected');
-                  break;
-                  
-                case 'disconnected':
-                  statusDot.style.background = '#666';
-                  statusDot.style.animation = 'none';
-                  statusText.textContent = 'Not Connected';
-                  startBtn.disabled = false;
-                  stopBtn.disabled = true;
-                  connectionStartTime = null;
-                  uptimeText.textContent = '';
-                  if (uptimeInterval) {
-                    clearInterval(uptimeInterval);
-                    uptimeInterval = null;
-                  }
-                  console.log('🔌 Soniox status updated: Disconnected');
-                  break;
-                  
-                case 'error':
-                  statusDot.style.background = '#e74c3c';
-                  statusDot.style.animation = 'pulse 0.5s infinite';
-                  statusText.textContent = 'Error';
-                  startBtn.disabled = false;
-                  stopBtn.disabled = true;
-                  connectionStartTime = null;
-                  uptimeText.textContent = '';
-                  if (uptimeInterval) {
-                    clearInterval(uptimeInterval);
-                    uptimeInterval = null;
-                  }
-                  if (data.message) {
-                    languageInfo.textContent = `Error: ${data.message}`;
-                    setTimeout(() => updateLanguageInfo(), 5000);
-                  }
-                  console.log('❌ Soniox status updated: Error', data.message || '');
-                  break;
-              }
-              
-              // Update language info if provided
-              if (data.message && data.status === 'connected') {
-                languageInfo.textContent = data.message;
-              }
-              
-              // Don't process further - status message handled
-              return;
-            }
-          } catch (e) {
-            // Not JSON or not a status message, continue to original handler
-          }
-          
-          // Call original handler for other message types
-          if (originalOnMessage) {
-            originalOnMessage(event);
-          }
-        };
-      }
     }
 
     /**

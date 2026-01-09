@@ -2058,9 +2058,9 @@ wssClients.on('connection', (ws) => {
               sonioxWs.send(audioData, { binary: true });
               lastAudioSentTime = Date.now();
               
-              // Log occasionally if config not yet confirmed (for debugging)
-              if (!isSonioxConfigured && Math.random() < 0.01) {
-                console.log('📤 Sending audio (waiting for config confirmation)...');
+              // Log occasionally for debugging (every ~100 chunks)
+              if (Math.random() < 0.01) {
+                console.log(`📤 Sending audio chunk: ${audioData.length} bytes (configured: ${isSonioxConfigured})`);
               }
             }
           } catch (error) {
@@ -2074,7 +2074,11 @@ wssClients.on('connection', (ws) => {
             }
           }
         } else if (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN) {
-          // Connection lost, attempt reconnection (only if not manual disconnect)
+          // Connection lost, log once
+          if (Math.random() < 0.001) {
+            console.warn('⚠️ Cannot send audio - Soniox not connected');
+          }
+          // Attempt reconnection (only if not manual disconnect)
           if (!manualDisconnect && !reconnectTimeout) {
             scheduleReconnect();
           }
@@ -2179,16 +2183,24 @@ function broadcastSonioxStatus(status, message = '') {
     message: message
   });
 
+  console.log(`📢 Broadcasting Soniox status: ${status} to ${clientWebSockets.length} client(s)`);
+
   // Broadcast to all browser clients
+  let sentCount = 0;
   clientWebSockets.forEach(ws => {
     if (ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(statusMessage);
+        sentCount++;
       } catch (err) {
         console.error('❌ Error broadcasting status to client:', err.message);
       }
     }
   });
+  
+  if (sentCount === 0 && clientWebSockets.length > 0) {
+    console.warn('⚠️ No clients received status update (all clients may be disconnected)');
+  }
 }
 
 /**
@@ -2391,12 +2403,49 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
 
       // Process transcription results
       // Soniox sends tokens with translation_status: 'original' or 'translation'
+      // When source = target (no translation), tokens may not have translation_status
       // Translation often comes in separate messages after original is finalized
       // For LIVE translation, we send both partial and final results
       if (message.tokens && Array.isArray(message.tokens) && message.tokens.length > 0) {
+        // Log first tokens to verify we're receiving them (with details for debugging)
+        if (sonioxWs._messageCount < 5) {
+          console.log(`🔍 Received ${message.tokens.length} tokens from Soniox`);
+          // Log token structure for first few messages to debug
+          if (message.tokens.length > 0) {
+            const sampleToken = message.tokens[0];
+            console.log(`   Sample token structure:`, {
+              hasText: !!sampleToken.text,
+              hasTranslationStatus: !!sampleToken.translation_status,
+              translationStatus: sampleToken.translation_status,
+              isFinal: sampleToken.is_final
+            });
+          }
+        } else if (Math.random() < 0.01) {
+          console.log(`🔍 Received ${message.tokens.length} tokens from Soniox`);
+        }
+        
+        // Check if translation is disabled (source = target)
+        const isTranslationDisabled = currentSonioxConfig.sourceLanguage === currentSonioxConfig.targetLanguage || 
+                                     currentSonioxConfig.targetLanguage === 'none';
+        
         // Separate original and translated tokens
-        const originalTokens = message.tokens.filter(t => t.translation_status === 'original');
-        const translatedTokens = message.tokens.filter(t => t.translation_status === 'translation' || t.translation_status === 'translated');
+        // When source = target, tokens may not have translation_status - treat ALL tokens as original
+        let originalTokens, translatedTokens;
+        if (isTranslationDisabled) {
+          // No translation - all tokens are "original" text
+          originalTokens = message.tokens.filter(t => t.text); // Only tokens with text
+          translatedTokens = []; // No translations
+        } else {
+          // Translation enabled - filter by translation_status
+          originalTokens = message.tokens.filter(t => 
+            !t.translation_status || 
+            t.translation_status === 'original'
+          );
+          translatedTokens = message.tokens.filter(t => 
+            t.translation_status === 'translation' || 
+            t.translation_status === 'translated'
+          );
+        }
         
         // Combine ALL token texts (both partial and final) for live feel
         const originalText = originalTokens.map(t => t.text || '').join('').trim();
@@ -2451,21 +2500,42 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
               });
             }
           } else if (originalText) {
-            // No translation yet, but we have original - send it for live feel
-            // (User will see Malayalam until translation arrives)
+            // No translation - send original text
+            // If translation is disabled (source = target), always send original
+            // Otherwise, we wait for translation (don't send original source language)
             const isFinal = finalOriginalTokens.length > 0 && finalOriginalTokens.length === originalTokens.length;
-            // Only log final results to reduce log spam (partial results are too frequent)
-            if (isFinal) {
-              console.log('📝 Final original (waiting for translation):', originalText);
-            }
             
-            // For now, we'll wait for translation (don't send original Malayalam)
-            // Uncomment below if you want to show original while waiting for translation:
-            // captionClients.forEach(client => {
-            //   if (client.readyState === WebSocket.OPEN) {
-            //     client.send(originalText);
-            //   }
-            // });
+            if (isTranslationDisabled) {
+              // Translation disabled - send original text immediately
+              if (isFinal) {
+                console.log('📝 Final caption (no translation):', originalText);
+              }
+              
+              // Broadcast original text (live updates)
+              broadcastToCaptions(originalText);
+              
+              // Log and send to YouTube (only final results)
+              if (isFinal) {
+                logCaption(originalText, true);
+                youtubePublisher.publish(originalText).catch(err => {
+                  // Error already logged in publish method
+                });
+              }
+            } else {
+              // Translation enabled - wait for translation
+              // Only log final results to reduce log spam (partial results are too frequent)
+              if (isFinal) {
+                console.log('📝 Final original (waiting for translation):', originalText);
+              }
+              
+              // For now, we'll wait for translation (don't send original source language)
+              // Uncomment below if you want to show original while waiting for translation:
+              // captionClients.forEach(client => {
+              //   if (client.readyState === WebSocket.OPEN) {
+              //     client.send(originalText);
+              //   }
+              // });
+            }
           }
         }
       }
