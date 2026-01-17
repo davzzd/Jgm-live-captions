@@ -1545,7 +1545,10 @@
      * Connect to WebSocket server
      */
     function connect() {
-      const wsUrl = 'ws://localhost:8080/client';
+      // Auto-detect protocol (ws/wss) and host from current page
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.host; // Includes port if specified
+      const wsUrl = `${protocol}//${host}/client`;
       updateStatus('Connecting to server...', '');
 
       ws = new WebSocket(wsUrl);
