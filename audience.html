@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Live Translation</title>
+  <style>
+    /* ===== PROFESSIONAL CHURCH AUDIENCE DESIGN ===== */
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    :root {
+      /* Professional color palette - warm, trustworthy, elegant */
+      --bg-primary: #0f1419;
+      --bg-secondary: #1a2332;
+      --bg-gradient: linear-gradient(135deg, #0f1419 0%, #1a2332 50%, #0f1419 100%);
+      --text-primary: #ffffff;
+      --text-secondary: #a8b4c8;
+      --text-muted: #6b7a95;
+      --accent: #5b8def;
+      --accent-hover: #7ba3f5;
+      --accent-glow: rgba(91, 141, 239, 0.15);
+      --caption-bg: rgba(26, 35, 50, 0.8);
+      --caption-border: rgba(91, 141, 239, 0.2);
+      --caption-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      
+      /* Typography - refined, readable */
+      --font-size-caption: 22px;
+      --font-size-time: 13px;
+      --font-size-title: 20px;
+      --line-height: 1.7;
+      --spacing: 20px;
+      --spacing-sm: 12px;
+      --spacing-lg: 32px;
+      
+      /* Border radius - modern, soft */
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      
+      /* Animations - smooth, professional */
+      --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-smooth: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    /* Light mode support */
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-primary: #f8f9fa;
+        --bg-secondary: #ffffff;
+        --bg-gradient: linear-gradient(135deg, #f8f9fa 0%, #ffffff 50%, #f8f9fa 100%);
+        --text-primary: #1a2332;
+        --text-secondary: #4a5568;
+        --text-muted: #718096;
+        --accent: #4c6ef5;
+        --accent-hover: #5c7cfa;
+        --accent-glow: rgba(76, 110, 245, 0.1);
+        --caption-bg: rgba(255, 255, 255, 0.9);
+        --caption-border: rgba(76, 110, 245, 0.15);
+        --caption-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      }
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 
+                   'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg-primary);
+      background-image: var(--bg-gradient);
+      color: var(--text-primary);
+      line-height: var(--line-height);
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) 
+              env(safe-area-inset-bottom) env(safe-area-inset-left);
+      min-height: 100vh;
+    }
+    
+    /* ===== HEADER ===== */
+    
+    .header {
+      position: sticky;
+      top: 0;
+      background: rgba(26, 35, 50, 0.85);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      padding: var(--spacing) var(--spacing-lg);
+      border-bottom: 1px solid var(--caption-border);
+      z-index: 100;
+      box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
+    }
+    
+    .header-content {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .title {
+      font-size: var(--font-size-title);
+      font-weight: 600;
+      letter-spacing: -0.3px;
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      color: var(--text-primary);
+    }
+    
+    .title-icon {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent-glow);
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+    }
+    
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      padding: 6px 12px;
+      background: rgba(91, 141, 239, 0.1);
+      border-radius: 20px;
+      border: 1px solid var(--caption-border);
+    }
+    
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4caf50;
+      box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+      animation: pulse 2s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { 
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% { 
+        opacity: 0.7;
+        transform: scale(1.1);
+      }
+    }
+    
+    .status-dot.disconnected {
+      background: #ef5350;
+      box-shadow: 0 0 8px rgba(239, 83, 80, 0.5);
+      animation: none;
+    }
+    
+    /* ===== CAPTIONS CONTAINER ===== */
+    
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: var(--spacing-lg) var(--spacing);
+      min-height: calc(100vh - 100px);
+    }
+    
+    .captions-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--spacing);
+    }
+    
+    .caption-item {
+      background: var(--caption-bg);
+      border: 1px solid var(--caption-border);
+      border-radius: var(--radius-md);
+      padding: var(--spacing-lg);
+      animation: fadeIn var(--transition-smooth);
+      transition: all var(--transition-smooth);
+      box-shadow: var(--caption-shadow);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .caption-item::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 3px;
+      height: 100%;
+      background: var(--accent);
+      opacity: 0;
+      transition: opacity var(--transition-fast);
+    }
+    
+    .caption-item.new {
+      animation: slideIn var(--transition-smooth);
+    }
+    
+    .caption-item.new::before {
+      opacity: 1;
+      animation: slideInAccent 0.6s ease;
+    }
+    
+    .caption-item.edited {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow), var(--caption-shadow);
+      animation: highlight 0.6s ease;
+    }
+    
+    .caption-item.edited::before {
+      opacity: 1;
+    }
+    
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(24px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    
+    @keyframes slideInAccent {
+      from {
+        height: 0;
+      }
+      to {
+        height: 100%;
+      }
+    }
+    
+    @keyframes highlight {
+      0%, 100% {
+        background: var(--caption-bg);
+      }
+      50% {
+        background: var(--accent-glow);
+      }
+    }
+    
+    .caption-time {
+      font-size: var(--font-size-time);
+      color: var(--text-muted);
+      margin-bottom: var(--spacing-sm);
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+    
+    .caption-text {
+      font-size: var(--font-size-caption);
+      color: var(--text-primary);
+      word-wrap: break-word;
+      line-height: var(--line-height);
+      font-weight: 400;
+      letter-spacing: -0.2px;
+    }
+    
+    /* ===== EMPTY STATE ===== */
+    
+    .empty-state {
+      text-align: center;
+      padding: 80px var(--spacing);
+      color: var(--text-secondary);
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    
+    .empty-state-icon {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto var(--spacing-lg);
+      opacity: 0.7;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .empty-state-icon svg {
+      width: 100%;
+      height: 100%;
+      stroke-width: 1.5;
+    }
+    
+    .empty-state-text {
+      font-size: 18px;
+      line-height: 1.6;
+      color: var(--text-secondary);
+    }
+    
+    .empty-state-text strong {
+      display: block;
+      font-size: 20px;
+      color: var(--text-primary);
+      margin-bottom: var(--spacing-sm);
+      font-weight: 600;
+    }
+    
+    /* ===== LOADING STATE ===== */
+    
+    .loading {
+      text-align: center;
+      padding: 80px var(--spacing);
+      color: var(--text-secondary);
+    }
+    
+    .loading-spinner {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto var(--spacing-lg);
+      border: 3px solid var(--caption-border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    .loading-text {
+      font-size: 16px;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    /* ===== TABLET OPTIMIZATIONS ===== */
+    
+    @media (min-width: 768px) {
+      :root {
+        --font-size-caption: 26px;
+        --font-size-time: 12px;
+        --font-size-title: 22px;
+        --spacing: 24px;
+        --spacing-lg: 40px;
+      }
+      
+      .header {
+        padding: var(--spacing) var(--spacing-lg);
+      }
+      
+      .container {
+        padding: var(--spacing-lg) var(--spacing-lg);
+      }
+      
+      .caption-item {
+        padding: var(--spacing-lg) 28px;
+      }
+    }
+    
+    /* ===== DESKTOP OPTIMIZATIONS ===== */
+    
+    @media (min-width: 1024px) {
+      :root {
+        --font-size-caption: 28px;
+        --spacing: 28px;
+      }
+      
+      .caption-item:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2), 0 0 0 1px var(--caption-border);
+      }
+      
+      .caption-item:hover::before {
+        opacity: 0.6;
+      }
+    }
+    
+    /* ===== ACCESSIBILITY ===== */
+    
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+    
+    /* High contrast mode support */
+    @media (prefers-contrast: high) {
+      .caption-item {
+        border-width: 2px;
+      }
+    }
+    
+    /* ===== OFFLINE INDICATOR ===== */
+    
+    .offline-banner {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(135deg, #ef5350 0%, #e53935 100%);
+      color: white;
+      padding: 16px var(--spacing);
+      text-align: center;
+      font-size: 14px;
+      font-weight: 500;
+      transform: translateY(100%);
+      transition: transform var(--transition-smooth);
+      z-index: 200;
+      box-shadow: 0 -4px 20px rgba(239, 83, 80, 0.3);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    
+    .offline-banner.show {
+      transform: translateY(0);
+    }
+    
+    /* ===== SCROLL TO TOP BUTTON ===== */
+    
+    .scroll-top {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 52px;
+      height: 52px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      font-size: 20px;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(91, 141, 239, 0.4);
+      opacity: 0;
+      transform: scale(0.8) translateY(10px);
+      transition: all var(--transition-smooth);
+      z-index: 150;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+    }
+    
+    .scroll-top.show {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+    
+    .scroll-top:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 6px 24px rgba(91, 141, 239, 0.5);
+      transform: scale(1.05) translateY(-2px);
+    }
+    
+    .scroll-top:active {
+      transform: scale(0.95) translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-content">
+      <div class="title">
+        <span>JGM Live Translation</span>
+      </div>
+      <div class="status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="container">
+    <div id="loadingState" class="loading">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Connecting to live stream...</div>
+    </div>
+    
+    <!-- Service Status Banner -->
+    <div id="serviceStatus" class="empty-state" style="display: none;">
+      <div class="empty-state-icon" id="serviceStatusIcon">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </div>
+      <div class="empty-state-text">
+        <strong id="serviceStatusTitle">Service Status</strong><br>
+        <span id="serviceStatusMessage">Checking status...</span>
+      </div>
+    </div>
+    
+    <div id="captionsList" class="captions-list" style="display: none;"></div>
+  </main>
+
+  <!-- Offline Banner -->
+  <div id="offlineBanner" class="offline-banner">
+    ⚠️ Connection lost. Reconnecting...
+  </div>
+
+  <!-- Scroll to Top Button -->
+  <button id="scrollTop" class="scroll-top" aria-label="Scroll to top">↑</button>
+
+  <script>
+    // ===== CONFIGURATION =====
+    const MAX_CAPTIONS = 6; // Show last 6 captions
+    const AUTO_SCROLL_THRESHOLD = 100; // px from bottom to auto-scroll
+    
+    // ===== STATE =====
+    let captions = [];
+    let eventSource = null;
+    let reconnectAttempts = 0;
+    let isAtBottom = true;
+    
+    // ===== DOM ELEMENTS =====
+    const captionsList = document.getElementById('captionsList');
+    const loadingState = document.getElementById('loadingState');
+    const serviceStatus = document.getElementById('serviceStatus');
+    const serviceStatusIcon = document.getElementById('serviceStatusIcon');
+    const serviceStatusTitle = document.getElementById('serviceStatusTitle');
+    const serviceStatusMessage = document.getElementById('serviceStatusMessage');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const offlineBanner = document.getElementById('offlineBanner');
+    const scrollTopBtn = document.getElementById('scrollTop');
+    
+    // ===== SERVICE STATUS =====
+    let currentServiceStatus = 'offline';
+    
+    // ===== UTILITY FUNCTIONS =====
+    
+    function formatTime(isoString) {
+      const date = new Date(isoString);
+      return date.toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: true 
+      });
+    }
+    
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    function checkScrollPosition() {
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollHeight = document.documentElement.scrollHeight;
+      const clientHeight = document.documentElement.clientHeight;
+      
+      isAtBottom = (scrollHeight - scrollTop - clientHeight) < AUTO_SCROLL_THRESHOLD;
+      
+      // Show/hide scroll to top button
+      if (scrollTop > 300) {
+        scrollTopBtn.classList.add('show');
+      } else {
+        scrollTopBtn.classList.remove('show');
+      }
+    }
+    
+    function scrollToBottom(smooth = true) {
+      window.scrollTo({
+        top: document.documentElement.scrollHeight,
+        behavior: smooth ? 'smooth' : 'auto'
+      });
+    }
+    
+    // ===== CAPTION RENDERING =====
+    
+    function updateServiceStatus(status, message) {
+      const previousStatus = currentServiceStatus;
+      currentServiceStatus = status;
+      
+      // Clear captions when pausing or when resuming from pause
+      if (status === 'paused' || (previousStatus === 'paused' && (status === 'ready' || status === 'live'))) {
+        captions = [];
+        renderCaptions();
+      }
+      
+      const statusConfig = {
+        'offline': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>', 
+          title: 'Service Not Started', 
+          color: '#ef5350' 
+        },
+        'connecting': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>', 
+          title: 'Connecting...', 
+          color: '#ff9800' 
+        },
+        'ready': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', 
+          title: 'Service is Live', 
+          color: '#4caf50' 
+        },
+        'paused': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>', 
+          title: 'Service Paused', 
+          color: '#ff9800' 
+        },
+        'ended': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>', 
+          title: 'Service Ended', 
+          color: '#9e9e9e' 
+        },
+        'starting_soon': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', 
+          title: 'Starting Soon', 
+          color: '#ffc107' 
+        },
+        'live': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', 
+          title: 'Service is Live', 
+          color: '#4caf50' 
+        },
+        'custom': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>', 
+          title: 'Service Update', 
+          color: '#5b8def' 
+        }
+      };
+      
+      const config = statusConfig[status] || statusConfig['offline'];
+      
+      serviceStatusIcon.innerHTML = config.icon;
+      serviceStatusTitle.textContent = config.title;
+      serviceStatusMessage.textContent = message;
+      serviceStatusIcon.style.color = config.color;
+      
+      // Control visibility based on status
+      // Hide captions when service is not active (offline, paused, ended, starting_soon)
+      const hideCaptionStatuses = ['offline', 'paused', 'ended', 'starting_soon'];
+      
+      if (hideCaptionStatuses.includes(status)) {
+        // Service not active - show status message, hide captions
+        serviceStatus.style.display = 'block';
+        captionsList.style.display = 'none';
+        loadingState.style.display = 'none';
+      } else if (status === 'ready' || status === 'live') {
+        // Service is live - show captions if available, otherwise show status
+        if (captions.length > 0) {
+          serviceStatus.style.display = 'none';
+          captionsList.style.display = 'flex';
+          loadingState.style.display = 'none';
+        } else {
+          serviceStatus.style.display = 'block';
+          captionsList.style.display = 'none';
+          loadingState.style.display = 'none';
+        }
+      }
+    }
+    
+    function renderCaptions() {
+      // Don't show captions if service is not active
+      const hideCaptionStatuses = ['offline', 'paused', 'ended', 'starting_soon'];
+      
+      if (hideCaptionStatuses.includes(currentServiceStatus)) {
+        captionsList.style.display = 'none';
+        serviceStatus.style.display = 'block';
+        loadingState.style.display = 'none';
+        return;
+      }
+      
+      if (captions.length === 0) {
+        captionsList.style.display = 'none';
+        serviceStatus.style.display = 'block';
+        loadingState.style.display = 'none';
+        return;
+      }
+      
+      loadingState.style.display = 'none';
+      serviceStatus.style.display = 'none';
+      captionsList.style.display = 'flex';
+      
+      captionsList.innerHTML = captions.map((caption, index) => `
+        <div class="caption-item ${caption.isNew ? 'new' : ''} ${caption.edited ? 'edited' : ''}" 
+             data-timestamp="${caption.timestamp}">
+          <div class="caption-time">${formatTime(caption.timestamp)}</div>
+          <div class="caption-text">${escapeHtml(caption.text)}</div>
+        </div>
+      `).join('');
+      
+      // Remove 'new' class after animation
+      setTimeout(() => {
+        captions.forEach(c => c.isNew = false);
+      }, 400);
+    }
+    
+    function addCaption(caption) {
+      // Check if caption already exists (avoid duplicates)
+      const existingIndex = captions.findIndex(c => c.timestamp === caption.timestamp);
+      
+      if (existingIndex !== -1) {
+        // Update existing caption (edit)
+        captions[existingIndex].text = caption.text;
+        captions[existingIndex].edited = caption.edited || false;
+      } else {
+        // Add new caption
+        caption.isNew = true;
+        captions.push(caption);
+        
+        // Maintain max limit
+        if (captions.length > MAX_CAPTIONS) {
+          captions.shift();
+        }
+      }
+      
+      renderCaptions();
+      
+      // Auto-scroll if user is at bottom
+      if (isAtBottom) {
+        setTimeout(() => scrollToBottom(true), 100);
+      }
+    }
+    
+    function deleteCaption(timestamp) {
+      // Remove caption from array
+      const index = captions.findIndex(c => c.timestamp === timestamp);
+      if (index !== -1) {
+        captions.splice(index, 1);
+        renderCaptions();
+      }
+    }
+    
+    // ===== CONNECTION MANAGEMENT =====
+    
+    function updateStatus(connected) {
+      if (connected) {
+        statusDot.classList.remove('disconnected');
+        statusText.textContent = 'Live';
+        offlineBanner.classList.remove('show');
+        reconnectAttempts = 0;
+      } else {
+        statusDot.classList.add('disconnected');
+        statusText.textContent = 'Offline';
+        offlineBanner.classList.add('show');
+      }
+    }
+    
+    function connect() {
+      // Close existing connection
+      if (eventSource) {
+        eventSource.close();
+      }
+      
+      // Create new SSE connection (no token needed)
+      const streamUrl = `/audience/stream`;
+      eventSource = new EventSource(streamUrl);
+      
+      eventSource.onopen = () => {
+        console.log('Connected to live stream');
+        updateStatus(true);
+      };
+      
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // Handle different message types
+          if (data.type === 'status') {
+            // Service status update
+            updateServiceStatus(data.status, data.message);
+          } else if (data.type === 'clear') {
+            // Clear all captions
+            captions = [];
+            renderCaptions();
+          } else if (data.type === 'delete') {
+            // Caption deletion
+            deleteCaption(data.timestamp);
+          } else if (data.type === 'caption' || data.text) {
+            // Caption update
+            addCaption(data);
+          }
+        } catch (error) {
+          console.error('Failed to parse message:', error);
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error('Connection error:', error);
+        updateStatus(false);
+        eventSource.close();
+        
+        // Exponential backoff reconnection
+        reconnectAttempts++;
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        
+        console.log(`Reconnecting in ${delay/1000}s...`);
+        setTimeout(connect, delay);
+      };
+    }
+    
+    // ===== EVENT LISTENERS =====
+    
+    window.addEventListener('scroll', checkScrollPosition);
+    
+    scrollTopBtn.addEventListener('click', () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    
+    // Handle page visibility changes
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !eventSource) {
+        connect();
+      }
+    });
+    
+    // Handle online/offline events
+    window.addEventListener('online', () => {
+      console.log('Network online');
+      if (!eventSource) {
+        connect();
+      }
+    });
+    
+    window.addEventListener('offline', () => {
+      console.log('Network offline');
+      updateStatus(false);
+    });
+    
+    // ===== INITIALIZATION =====
+    
+    // Start connection
+    connect();
+    
+    // Initial scroll check
+    checkScrollPosition();
+  </script>
+</body>
+</html>
+

@@ -14,6 +14,7 @@ RUN npm ci --only=production
 COPY ws-server.js ./
 COPY captions.html ./
 COPY client.html ./
+COPY audience.html ./
 
 # Create .env file placeholder (user should mount their own)
 # This ensures the app doesn't crash if .env is missing

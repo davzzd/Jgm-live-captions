@@ -32,6 +32,7 @@ const captionHistory = []; // In-memory store for current session (for quick acc
 // SSE clients for real-time streaming
 const transcriptSSEClients = new Set();
 const logsSSEClients = new Set();
+const audienceSSEClients = new Set(); // Audience viewers (read-only)
 
 // Save original console methods FIRST (before any function uses them)
 const originalConsoleLog = console.log;
@@ -183,6 +184,18 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 // Support both YOUTUBE_CAPTION_URL (singular) and YOUTUBE_CAPTIONS_URL (plural) for compatibility
 const YOUTUBE_CAPTIONS_URL = process.env.YOUTUBE_CAPTION_URL || process.env.YOUTUBE_CAPTIONS_URL;
 const YOUTUBE_CAPTIONS_LANGUAGE = process.env.LANGUAGE || 'en';
+
+// ===== AUDIENCE SYSTEM =====
+// Token system removed - using simple /audience endpoint
+let audienceCaptionBuffer = []; // Last 6 captions for audience display (kept for backwards compat)
+const AUDIENCE_CAPTION_LIMIT = 6; // Show last 6 captions to audience
+
+// Service status tracking (for audience status display)
+let serviceStatus = {
+  status: 'offline',  // 'offline', 'connecting', 'ready', 'paused', 'ended'
+  message: 'Service has not started yet',
+  timestamp: new Date().toISOString()
+};
 
 // Soniox connection state management
 let sonioxWs = null;
@@ -549,6 +562,60 @@ function broadcastToCaptions(text) {
   });
   // Clean up dead clients
   deadClients.forEach(client => captionClients.delete(client));
+}
+
+/**
+ * Broadcast caption to audience viewers via SSE
+ * Maintains a buffer of last N captions for new connections
+ */
+function broadcastToAudience(text, isFinal = false) {
+  if (!text) return;
+  
+  // Only add final captions to audience buffer
+  if (isFinal) {
+    const timestamp = new Date().toISOString();
+    const caption = { text, timestamp, type: 'caption' };
+    
+    // Add to buffer and maintain limit
+    audienceCaptionBuffer.push(caption);
+    if (audienceCaptionBuffer.length > AUDIENCE_CAPTION_LIMIT) {
+      audienceCaptionBuffer.shift(); // Remove oldest
+    }
+    
+    // Broadcast to all connected audience viewers
+    const data = JSON.stringify(caption);
+    audienceSSEClients.forEach(client => {
+      try {
+        client.write(`data: ${data}\n\n`);
+      } catch (error) {
+        // Client disconnected, will be cleaned up on close event
+      }
+    });
+  }
+}
+
+/**
+ * Broadcast service status to audience viewers
+ * Shows pre-service, live, paused, ended states
+ */
+function broadcastServiceStatus(status, message) {
+  serviceStatus = {
+    type: 'status',
+    status: status,  // 'offline', 'connecting', 'ready', 'paused', 'ended'
+    message: message,
+    timestamp: new Date().toISOString()
+  };
+  
+  const data = JSON.stringify(serviceStatus);
+  audienceSSEClients.forEach(client => {
+    try {
+      client.write(`data: ${data}\n\n`);
+    } catch (error) {
+      // Client disconnected
+    }
+  });
+  
+  console.log(`📢 Service status broadcast: ${status} - ${message}`);
 }
 
 /**
@@ -1039,7 +1106,10 @@ app.get('/transcript', (req, res) => {
                   <span class="date">${date}</span>
                   <span class="time">${time}</span>
                 </div>
-                <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                <div class="caption-actions">
+                  <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                  <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
+                </div>
               </div>
               <div class="caption-text" data-original="${escapeHtml(c.text).replace(/"/g, '&quot;')}">${escapeHtml(c.text)}</div>
             </div>
@@ -1207,7 +1277,11 @@ app.get('/transcript', (req, res) => {
               color: #9cdcfe;
               font-weight: 600;
             }
-            .edit-btn {
+            .caption-actions {
+              display: flex;
+              gap: 6px;
+            }
+            .edit-btn, .delete-btn {
               background: transparent;
               border: 1px solid transparent;
               color: #858585;
@@ -1218,13 +1292,19 @@ app.get('/transcript', (req, res) => {
               opacity: 0;
               transition: all 0.2s;
             }
-            .caption-item:hover .edit-btn {
+            .caption-item:hover .edit-btn,
+            .caption-item:hover .delete-btn {
               opacity: 1;
             }
             .edit-btn:hover {
               background: #3e3e42;
               border-color: #4ec9b0;
               color: #4ec9b0;
+            }
+            .delete-btn:hover {
+              background: #3e3e42;
+              border-color: #f44336;
+              color: #f44336;
             }
             .caption-text {
               color: #d4d4d4;
@@ -1628,6 +1708,43 @@ app.get('/transcript', (req, res) => {
               captionItem.querySelector('.edit-btn').style.display = '';
             }
 
+            function deleteCaption(button) {
+              const captionItem = button.closest('.caption-item');
+              const timestamp = captionItem.getAttribute('data-timestamp');
+              const captionText = captionItem.querySelector('.caption-text').textContent;
+              
+              // Confirm deletion
+              if (!confirm(\`Are you sure you want to delete this caption?\\n\\n"\${captionText.substring(0, 100)}\${captionText.length > 100 ? '...' : ''}"\`)) {
+                return;
+              }
+              
+              // Send delete request to server
+              fetch('/transcript/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timestamp })
+              })
+              .then(response => response.json())
+              .then(data => {
+                if (data.success) {
+                  // Remove from DOM with animation
+                  captionItem.style.opacity = '0';
+                  captionItem.style.transform = 'translateX(-20px)';
+                  setTimeout(() => {
+                    captionItem.remove();
+                    // Update stats
+                    updateStats();
+                  }, 300);
+                } else {
+                  alert('Failed to delete caption: ' + (data.error || 'Unknown error'));
+                }
+              })
+              .catch(error => {
+                console.error('Error deleting caption:', error);
+                alert('Failed to delete caption. Check console for details.');
+              });
+            }
+
             function saveEdit(button) {
               const captionItem = button.closest('.caption-item');
               const captionText = captionItem.querySelector('.caption-text');
@@ -1724,7 +1841,10 @@ app.get('/transcript', (req, res) => {
                     <span class="date">\${date}</span>
                     <span class="time">\${time}</span>
                   </div>
-                  <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                  <div class="caption-actions">
+                    <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                    <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
+                  </div>
                 </div>
                 <div class="caption-text" data-original="\${caption.text.replace(/"/g, '&quot;')}">\${caption.text}</div>
               \`;
@@ -1830,7 +1950,101 @@ app.post('/transcript/edit', (req, res) => {
         memoryEntry.text = newText;
       }
       
+      // Update audience buffer if this caption is in it
+      const audienceEntry = audienceCaptionBuffer.find(c => c.timestamp === timestamp);
+      if (audienceEntry) {
+        audienceEntry.text = newText;
+        
+        // Broadcast edit to all audience viewers
+        const editEvent = JSON.stringify({ 
+          text: newText, 
+          timestamp: timestamp,
+          edited: true 
+        });
+        audienceSSEClients.forEach(client => {
+          try {
+            client.write(`data: ${editEvent}\n\n`);
+          } catch (error) {
+            // Client disconnected
+          }
+        });
+      }
+      
       res.json({ success: true, message: 'Caption updated successfully' });
+    });
+  });
+});
+
+/**
+ * Delete a caption from the transcript
+ */
+app.post('/transcript/delete', (req, res) => {
+  const { timestamp } = req.body;
+  
+  if (!timestamp) {
+    return res.status(400).json({ success: false, error: 'Missing timestamp' });
+  }
+  
+  // Read the captions file
+  fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
+    if (err) {
+      logger.error('Failed to read captions for delete:', err.message);
+      return res.status(500).json({ success: false, error: 'Failed to read captions file' });
+    }
+    
+    // Parse and remove the caption
+    const lines = data.split('\n').filter(line => line.trim());
+    let deleted = false;
+    let deletedText = '';
+    const updatedLines = lines.filter(line => {
+      const parts = line.split('\t');
+      if (parts[0] === timestamp) {
+        deleted = true;
+        deletedText = parts.slice(1).join('\t');
+        logger.info(`Caption deleted: "${deletedText}" (${timestamp})`);
+        return false; // Remove this line
+      }
+      return true; // Keep this line
+    });
+    
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Caption not found' });
+    }
+    
+    // Write back to file
+    const newContent = updatedLines.join('\n') + '\n';
+    fs.writeFile(CAPTIONS_LOG_FILE, newContent, 'utf8', (err) => {
+      if (err) {
+        logger.error('Failed to save after caption delete:', err.message);
+        return res.status(500).json({ success: false, error: 'Failed to save changes' });
+      }
+      
+      // Remove from in-memory history if present
+      const memoryIndex = captionHistory.findIndex(c => c.timestamp === timestamp);
+      if (memoryIndex !== -1) {
+        captionHistory.splice(memoryIndex, 1);
+      }
+      
+      // Remove from audience buffer if present and broadcast deletion
+      const audienceIndex = audienceCaptionBuffer.findIndex(c => c.timestamp === timestamp);
+      if (audienceIndex !== -1) {
+        audienceCaptionBuffer.splice(audienceIndex, 1);
+        
+        // Broadcast delete event to all audience viewers
+        const deleteEvent = JSON.stringify({ 
+          type: 'delete',
+          timestamp: timestamp
+        });
+        audienceSSEClients.forEach(client => {
+          try {
+            client.write(`data: ${deleteEvent}\n\n`);
+          } catch (error) {
+            // Client disconnected
+          }
+        });
+      }
+      
+      res.json({ success: true, message: 'Caption deleted successfully' });
     });
   });
 });
@@ -1886,6 +2100,164 @@ app.get('/logs/stream', (req, res) => {
     logsSSEClients.delete(res);
   });
 });
+
+// ===== AUDIENCE ENDPOINTS =====
+
+/**
+ * Audience page - public read-only caption viewer
+ * Mobile-first design for church members
+ * Access via: /audience (no token needed)
+ */
+app.get('/audience', (req, res) => {
+  // Serve audience.html (public access)
+  res.sendFile(path.join(__dirname, 'audience.html'));
+});
+
+/**
+ * SSE endpoint for audience live caption stream
+ * Sends last 6 captions to new connections, then streams updates
+ */
+app.get('/audience/stream', (req, res) => {
+  
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  // Add client to set
+  audienceSSEClients.add(res);
+  
+  console.log(`👥 Audience viewer connected (${audienceSSEClients.size} total)`);
+
+  // Send initial service status
+  res.write(`data: ${JSON.stringify(serviceStatus)}\n\n`);
+  
+  // Only send captions if service is live/ready (not offline, starting_soon, paused, or ended)
+  const activeStatuses = ['ready', 'live'];
+  if (activeStatuses.includes(serviceStatus.status)) {
+    // Read last N captions from file (not memory buffer) to ensure sync with edits/deletes
+    try {
+      if (fs.existsSync(CAPTIONS_LOG_FILE)) {
+        const data = fs.readFileSync(CAPTIONS_LOG_FILE, 'utf8');
+        const lines = data.split('\n').filter(line => line.trim());
+        
+        // Get last 6 captions from file
+        const recentLines = lines.slice(-AUDIENCE_CAPTION_LIMIT);
+        const recentCaptions = recentLines.map(line => {
+          const parts = line.split('\t');
+          return {
+            type: 'caption',
+            timestamp: parts[0],
+            text: parts.slice(1).join('\t')
+          };
+        });
+        
+        // Send recent captions to new viewer
+        recentCaptions.forEach(caption => {
+          res.write(`data: ${JSON.stringify(caption)}\n\n`);
+        });
+        
+        // Also update memory buffer to match file (ensures consistency)
+        audienceCaptionBuffer = recentCaptions;
+      }
+    } catch (error) {
+      console.error('Error reading captions for audience:', error);
+    }
+  }
+  
+  // Send initial heartbeat
+  res.write(': heartbeat\n\n');
+
+  // Keep connection alive with periodic heartbeats
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': heartbeat\n\n');
+    } catch (error) {
+      clearInterval(heartbeat);
+    }
+  }, 30000);
+
+  // Clean up on close
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    audienceSSEClients.delete(res);
+    console.log(`👥 Audience viewer disconnected (${audienceSSEClients.size} remaining)`);
+  });
+});
+
+/**
+ * Admin API: Get current audience URL
+ * Returns simple /audience URL (no token needed)
+ */
+app.get('/api/audience-token', (req, res) => {
+  const protocol = req.protocol;
+  const host = req.get('host');
+  const url = `${protocol}://${host}/audience`;
+  
+  res.json({
+    url: url,
+    activeViewers: audienceSSEClients.size,
+    note: 'Token system removed - using simple /audience endpoint'
+  });
+});
+
+/**
+ * Admin API: Manually set audience status
+ * Allows admin to control what message audience sees
+ */
+app.post('/api/audience-status', (req, res) => {
+  const { status, message } = req.body;
+  
+  if (!status || !message) {
+    return res.status(400).json({ success: false, error: 'Missing status or message' });
+  }
+  
+  // Clear old captions when service is starting (fresh start for new service)
+  if (status === 'starting_soon') {
+    try {
+      fs.writeFileSync(CAPTIONS_LOG_FILE, '', 'utf8');
+      captionHistory.length = 0; // Clear in-memory history
+      audienceCaptionBuffer = []; // Clear audience buffer
+      console.log('🧹 Cleared old captions for new service');
+    } catch (error) {
+      console.error('Failed to clear captions:', error);
+    }
+  }
+  
+  // Clear captions when pausing or when resuming from pause
+  if (status === 'paused' || (serviceStatus.status === 'paused' && (status === 'ready' || status === 'live'))) {
+    try {
+      // Clear in-memory buffers
+      captionHistory.length = 0;
+      audienceCaptionBuffer = [];
+      
+      // Broadcast clear event to all audience viewers
+      const clearEvent = JSON.stringify({ type: 'clear' });
+      audienceSSEClients.forEach(client => {
+        try {
+          client.write(`data: ${clearEvent}\n\n`);
+        } catch (error) {
+          // Client disconnected
+        }
+      });
+      
+      console.log('🧹 Cleared captions from audience (pause/resume)');
+    } catch (error) {
+      console.error('Failed to clear captions:', error);
+    }
+  }
+  
+  // Update service status and broadcast to audience
+  broadcastServiceStatus(status, message);
+  
+  console.log(`📢 Manual audience status set: ${status} - ${message}`);
+  
+  res.json({
+    success: true,
+    status: status,
+    message: message
+  });
+});
+
 
 /**
  * Serve static files (if needed)
@@ -1986,8 +2358,12 @@ wssClients.on('connection', (ws) => {
         const { apiKey, sourceLanguage, targetLanguage, youtubeCaptionUrl } = data;
         console.log(`🎬 Client requested to start Soniox connection: ${sourceLanguage} → ${targetLanguage}`);
         
+        // Broadcast to audience that service is starting
+        broadcastServiceStatus('connecting', 'Connecting to translation service...');
+        
         // Validate inputs
         if (!apiKey || apiKey.trim().length === 0) {
+          broadcastServiceStatus('offline', 'Service not started - Configuration error');
           ws.send(JSON.stringify({
             type: 'soniox_status',
             status: 'error',
@@ -2024,6 +2400,7 @@ wssClients.on('connection', (ws) => {
       } else if (data.type === 'stop_soniox') {
         // Client requesting to stop Soniox connection
         console.log('🛑 Client requested to stop Soniox connection');
+        broadcastServiceStatus('ended', 'Service has ended');
         shutdownSonioxConnection();
       } else if (data.type === 'get_soniox_status') {
         // Client requesting current Soniox status
@@ -2398,7 +2775,8 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       if (!isSonioxConfigured && message.tokens !== undefined) {
         isSonioxConfigured = true;
         console.log('✅ Soniox configuration confirmed - receiving transcriptions');
-        // Don't broadcast status again - already marked as connected when config was sent
+        // Broadcast to audience that service is now live
+        broadcastServiceStatus('ready', 'Service is live - Translations appearing below');
       }
 
       // Process transcription results
@@ -2472,9 +2850,10 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
             // Broadcast translated text immediately (live updates) - don't wait for final
             broadcastToCaptions(translatedText);
             
-            // Send to YouTube (only final results)
+            // Send to YouTube and audience (only final results)
             if (isFinal) {
               logCaption(translatedText, true); // Log final caption to history
+              broadcastToAudience(translatedText, true); // Send to audience viewers
               youtubePublisher.publish(translatedText).catch(err => {
                 // Error already logged in publish method
               });
@@ -2496,9 +2875,10 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
             // Broadcast translated text immediately (live updates) - don't wait for final
             broadcastToCaptions(translatedText);
             
-            // Send to YouTube (only final results)
+            // Send to YouTube and audience (only final results)
             if (isFinal) {
               logCaption(translatedText, true); // Log final caption to history
+              broadcastToAudience(translatedText, true); // Send to audience viewers
               youtubePublisher.publish(translatedText).catch(err => {
                 // Error already logged in publish method
               });
@@ -2518,9 +2898,10 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
               // Broadcast original text (live updates)
               broadcastToCaptions(originalText);
               
-              // Log and send to YouTube (only final results)
+              // Log and send to YouTube and audience (only final results)
               if (isFinal) {
                 logCaption(originalText, true);
+                broadcastToAudience(originalText, true); // Send to audience viewers
                 youtubePublisher.publish(originalText).catch(err => {
                   // Error already logged in publish method
                 });
@@ -2593,10 +2974,12 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
     if (manualDisconnect) {
       sonioxConnectionState = 'disconnected';
       broadcastSonioxStatus('disconnected', 'Connection stopped by user');
+      broadcastServiceStatus('offline', 'Service has ended');
     } else {
       sonioxConnectionState = 'disconnected';
       const reasonStr = reason?.toString() || 'Unknown reason';
       broadcastSonioxStatus('disconnected', `Connection closed: ${reasonStr} (code: ${code})`);
+      broadcastServiceStatus('offline', 'Connection lost - Reconnecting...');
     }
     
     // Only reconnect if not a normal closure (1000) or going away (1001), and not a manual disconnect
@@ -2762,6 +3145,7 @@ server.listen(PORT, () => {
   console.log(`🌐 Open http://localhost:${PORT} in Resolume Browser Source`);
   console.log(`📊 Server logs: http://localhost:${PORT}/logs`);
   console.log(`📝 Caption transcript: http://localhost:${PORT}/transcript`);
+  console.log(`👥 Audience viewer: http://localhost:${PORT}/audience`);
   console.log(`⏱️  Optimized for long-running sessions (3+ hours)`);
 });
 

@@ -657,6 +657,289 @@
           transform: translateY(-2px);
           box-shadow: 0 4px 12px rgba(92, 131, 116, 0.3);
         }
+        
+        /* Audience Card Styles */
+        .audience-card {
+          background: rgba(4, 13, 18, 0.6);
+          border-radius: 12px;
+          border: 1px solid rgba(92, 131, 116, 0.3);
+          margin-bottom: 16px;
+          overflow: hidden;
+        }
+        
+        .audience-card-header {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 16px 20px;
+          background: rgba(24, 61, 61, 0.4);
+          border-bottom: 1px solid rgba(92, 131, 116, 0.2);
+        }
+        
+        .audience-card-icon {
+          font-size: 20px;
+        }
+        
+        .audience-card-title {
+          font-size: 15px;
+          font-weight: 600;
+          color: #93B1A6;
+        }
+        
+        .audience-card-body {
+          padding: 20px;
+        }
+        
+        .audience-description {
+          font-size: 13px;
+          opacity: 0.7;
+          margin-bottom: 16px;
+          line-height: 1.5;
+        }
+        
+        /* URL Display */
+        .url-display-group {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 16px;
+        }
+        
+        .url-input {
+          flex: 1;
+          padding: 12px;
+          border-radius: 8px;
+          border: 1px solid rgba(92, 131, 116, 0.4);
+          background: rgba(0, 0, 0, 0.3);
+          color: #93B1A6;
+          font-family: 'Courier New', monospace;
+          font-size: 12px;
+          cursor: text;
+        }
+        
+        .copy-btn {
+          padding: 12px 24px;
+          background: rgba(92, 131, 116, 0.3);
+          border: 1px solid rgba(92, 131, 116, 0.5);
+          border-radius: 8px;
+          color: #93B1A6;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+          white-space: nowrap;
+        }
+        
+        .copy-btn:hover {
+          background: rgba(92, 131, 116, 0.5);
+          border-color: #93B1A6;
+        }
+        
+        /* QR Code */
+        .qr-container {
+          text-align: center;
+          margin: 16px 0;
+          padding: 20px;
+          background: white;
+          border-radius: 8px;
+        }
+        
+        .qr-hint {
+          font-size: 11px;
+          color: #666;
+          margin-top: 8px;
+        }
+        
+        /* Button Row */
+        .button-row {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 16px;
+        }
+        
+        .action-btn {
+          flex: 1;
+          padding: 10px 16px;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+          border: 1px solid;
+        }
+        
+        .action-btn.secondary {
+          background: rgba(92, 131, 116, 0.3);
+          border-color: rgba(92, 131, 116, 0.5);
+          color: #93B1A6;
+        }
+        
+        .action-btn.secondary:hover {
+          background: rgba(92, 131, 116, 0.5);
+          border-color: #93B1A6;
+        }
+        
+        .action-btn.danger {
+          background: rgba(244, 67, 54, 0.2);
+          border-color: rgba(244, 67, 54, 0.4);
+          color: #f48989;
+        }
+        
+        .action-btn.danger:hover {
+          background: rgba(244, 67, 54, 0.3);
+          border-color: rgba(244, 67, 54, 0.6);
+        }
+        
+        /* Stats Row */
+        .stats-row {
+          display: flex;
+          justify-content: space-between;
+          padding-top: 16px;
+          border-top: 1px solid rgba(92, 131, 116, 0.2);
+          font-size: 11px;
+          opacity: 0.6;
+        }
+        
+        .stat-item {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        
+        .stat-value {
+          font-weight: 700;
+          color: #93B1A6;
+        }
+        
+        /* Current Status Display */
+        .current-status {
+          margin-bottom: 16px;
+          padding: 16px;
+          background: rgba(24, 61, 61, 0.4);
+          border-radius: 8px;
+          border: 1px solid rgba(92, 131, 116, 0.2);
+        }
+        
+        .status-badge {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 8px;
+        }
+        
+        .status-dot {
+          font-size: 16px;
+        }
+        
+        #currentStatusLabel {
+          font-size: 14px;
+          font-weight: 600;
+          color: #93B1A6;
+        }
+        
+        .status-message {
+          font-size: 12px;
+          opacity: 0.7;
+          line-height: 1.5;
+        }
+        
+        /* Status Buttons */
+        .status-buttons {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-bottom: 16px;
+        }
+        
+        .status-btn {
+          padding: 12px;
+          border-radius: 8px;
+          border: 1px solid;
+          background: rgba(255, 255, 255, 0.05);
+          cursor: pointer;
+          transition: all 0.2s;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        
+        .status-btn-icon {
+          font-size: 18px;
+        }
+        
+        .status-btn-label {
+          font-size: 13px;
+          font-weight: 500;
+        }
+        
+        .status-btn.starting-soon {
+          border-color: rgba(255, 193, 7, 0.4);
+          color: #ffc107;
+        }
+        
+        .status-btn.starting-soon:hover {
+          background: rgba(255, 193, 7, 0.2);
+          border-color: rgba(255, 193, 7, 0.6);
+        }
+        
+        .status-btn.live {
+          border-color: rgba(76, 175, 80, 0.4);
+          color: #4caf50;
+        }
+        
+        .status-btn.live:hover {
+          background: rgba(76, 175, 80, 0.2);
+          border-color: rgba(76, 175, 80, 0.6);
+        }
+        
+        .status-btn.paused {
+          border-color: rgba(255, 152, 0, 0.4);
+          color: #ff9800;
+        }
+        
+        .status-btn.paused:hover {
+          background: rgba(255, 152, 0, 0.2);
+          border-color: rgba(255, 152, 0, 0.6);
+        }
+        
+        .status-btn.ended {
+          border-color: rgba(158, 158, 158, 0.4);
+          color: #9e9e9e;
+        }
+        
+        .status-btn.ended:hover {
+          background: rgba(158, 158, 158, 0.2);
+          border-color: rgba(158, 158, 158, 0.6);
+        }
+        
+        /* Custom Message */
+        .custom-message-section {
+          padding-top: 16px;
+          border-top: 1px solid rgba(92, 131, 116, 0.2);
+        }
+        
+        .custom-message-label {
+          display: block;
+          font-size: 12px;
+          opacity: 0.8;
+          margin-bottom: 8px;
+        }
+        
+        .custom-message-input {
+          width: 100%;
+          padding: 10px 12px;
+          border-radius: 8px;
+          border: 1px solid rgba(92, 131, 116, 0.4);
+          background: rgba(4, 13, 18, 0.6);
+          color: #93B1A6;
+          font-size: 13px;
+          margin-bottom: 8px;
+        }
+        
+        .custom-message-input:focus {
+          outline: none;
+          border-color: #93B1A6;
+          background: rgba(24, 61, 61, 0.8);
+        }
       </style>
 
       <div class="status-card">
@@ -1002,6 +1285,112 @@
               <label class="setting-label">Fade Out Duration (ms)</label>
               <input type="range" id="fadeOutDuration" class="setting-input" min="0" max="1000" value="300" step="50">
               <span class="setting-value" id="fadeOutDurationValue">300ms</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Audience Viewer Management -->
+        <div class="settings-section">
+          <div class="settings-section-title">👥 Audience Viewer</div>
+          
+          <!-- Share Link Card -->
+          <div class="audience-card">
+            <div class="audience-card-header">
+              <span class="audience-card-icon">🔗</span>
+              <span class="audience-card-title">Share Link</span>
+            </div>
+            <div class="audience-card-body">
+              <div class="audience-description">
+                Share this link with congregation members to view live translations
+              </div>
+              
+              <!-- URL Display -->
+              <div class="url-display-group">
+                <input type="text" id="audienceUrl" readonly 
+                       class="url-input" 
+                       placeholder="Loading...">
+                <button id="copyAudienceUrl" class="copy-btn" title="Copy to clipboard">
+                  📋 Copy
+                </button>
+              </div>
+              
+              <!-- QR Code Container -->
+              <div id="qrCodeContainer" class="qr-container" style="display: none;">
+                <canvas id="qrCode"></canvas>
+                <div class="qr-hint">Scan with phone camera</div>
+              </div>
+              
+              <!-- Action Buttons Row -->
+              <div class="button-row">
+                <button id="showQrCode" class="action-btn secondary">
+                  📱 Show QR Code
+                </button>
+              </div>
+              
+              <!-- Stats Row -->
+              <div class="stats-row">
+                <div class="stat-item">
+                  <span class="stat-icon">👁️</span>
+                  <span class="stat-label">Active viewers:</span>
+                  <span class="stat-value" id="activeViewers">0</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-icon">📱</span>
+                  <span class="stat-label">Mobile-optimized</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Status Control Card -->
+          <div class="audience-card">
+            <div class="audience-card-header">
+              <span class="audience-card-icon">🎬</span>
+              <span class="audience-card-title">Audience Status</span>
+            </div>
+            <div class="audience-card-body">
+              <div class="audience-description">
+                Control what message audience viewers see
+              </div>
+              
+              <!-- Current Status Display -->
+              <div class="current-status">
+                <div class="status-badge" id="currentStatusBadge">
+                  <span class="status-dot" id="currentStatusDot">🔴</span>
+                  <span id="currentStatusLabel">Offline</span>
+                </div>
+                <div class="status-message" id="currentStatusMessage">Service has not started yet</div>
+              </div>
+              
+              <!-- Status Buttons -->
+              <div class="status-buttons">
+                <button class="status-btn starting-soon" onclick="setAudienceStatus('starting_soon')">
+                  <span class="status-btn-icon">🟡</span>
+                  <span class="status-btn-label">Starting Soon</span>
+                </button>
+                <button class="status-btn live" onclick="setAudienceStatus('live')">
+                  <span class="status-btn-icon">🟢</span>
+                  <span class="status-btn-label">Service Live</span>
+                </button>
+                <button class="status-btn paused" onclick="setAudienceStatus('paused')">
+                  <span class="status-btn-icon">⏸️</span>
+                  <span class="status-btn-label">Paused</span>
+                </button>
+                <button class="status-btn ended" onclick="setAudienceStatus('ended')">
+                  <span class="status-btn-icon">⏹️</span>
+                  <span class="status-btn-label">Service Ended</span>
+                </button>
+              </div>
+              
+              <!-- Custom Message -->
+              <div class="custom-message-section">
+                <label class="custom-message-label">Custom Message (Optional):</label>
+                <input type="text" id="customStatusMessage" class="custom-message-input" 
+                       placeholder="Enter custom message for audience...">
+                <button class="action-btn secondary" onclick="setCustomAudienceMessage()">
+                  📝 Set Custom Message
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1592,6 +1981,9 @@
       // Initialize Soniox connection controls
       initializeSonioxControls();
       
+      // Initialize audience link controls
+      initializeAudienceLink();
+      
       // Load saved settings from localStorage
       loadSettings();
     }
@@ -1872,6 +2264,207 @@
     }
 
     /**
+     * Initialize Audience Link Controls
+     */
+    function initializeAudienceLink() {
+      const audienceUrlInput = document.getElementById('audienceUrl');
+      const copyBtn = document.getElementById('copyAudienceUrl');
+      const showQrBtn = document.getElementById('showQrCode');
+      const qrContainer = document.getElementById('qrCodeContainer');
+      const qrCanvas = document.getElementById('qrCode');
+      const activeViewersSpan = document.getElementById('activeViewers');
+      
+      let currentAudienceUrl = '';
+      let qrCodeVisible = false;
+      
+      // Fetch initial audience URL
+      fetchAudienceToken();
+      
+      // Refresh viewer count every 10 seconds
+      setInterval(fetchAudienceToken, 10000);
+      
+      // Copy URL to clipboard
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(currentAudienceUrl);
+          copyBtn.textContent = '✅ Copied!';
+          copyBtn.style.background = 'rgba(76, 175, 80, 0.3)';
+          setTimeout(() => {
+            copyBtn.textContent = '📋 Copy';
+            copyBtn.style.background = '';
+          }, 2000);
+        } catch (error) {
+          // Fallback for older browsers
+          audienceUrlInput.select();
+          document.execCommand('copy');
+          copyBtn.textContent = '✅ Copied!';
+          setTimeout(() => {
+            copyBtn.textContent = '📋 Copy';
+          }, 2000);
+        }
+      });
+      
+      // Show/Hide QR Code
+      showQrBtn.addEventListener('click', () => {
+        qrCodeVisible = !qrCodeVisible;
+        if (qrCodeVisible) {
+          generateQRCode(currentAudienceUrl);
+          qrContainer.style.display = 'block';
+          showQrBtn.textContent = '❌ Hide QR Code';
+        } else {
+          qrContainer.style.display = 'none';
+          showQrBtn.textContent = '📱 Show QR Code';
+        }
+      });
+      
+      // Fetch audience URL from server
+      async function fetchAudienceToken() {
+        try {
+          const response = await fetch('/api/audience-token');
+          if (response.ok) {
+            const data = await response.json();
+            currentAudienceUrl = data.url;
+            audienceUrlInput.value = data.url;
+            activeViewersSpan.textContent = data.activeViewers || 0;
+          } else {
+            // Fallback: construct URL manually if API fails
+            const protocol = window.location.protocol;
+            const host = window.location.host;
+            currentAudienceUrl = `${protocol}//${host}/audience`;
+            audienceUrlInput.value = currentAudienceUrl;
+          }
+        } catch (error) {
+          console.error('Error fetching audience URL:', error);
+          // Fallback: construct URL manually
+          const protocol = window.location.protocol;
+          const host = window.location.host;
+          currentAudienceUrl = `${protocol}//${host}/audience`;
+          audienceUrlInput.value = currentAudienceUrl;
+        }
+      }
+      
+      // Generate QR Code using simple canvas drawing
+      function generateQRCode(url) {
+        // Use a free QR code API service
+        const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}`;
+        
+        // Create an image and draw it on canvas
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          const ctx = qrCanvas.getContext('2d');
+          qrCanvas.width = 200;
+          qrCanvas.height = 200;
+          ctx.drawImage(img, 0, 0, 200, 200);
+        };
+        img.onerror = () => {
+          // Fallback: draw text if QR API fails
+          const ctx = qrCanvas.getContext('2d');
+          qrCanvas.width = 200;
+          qrCanvas.height = 200;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, 200, 200);
+          ctx.fillStyle = '#000000';
+          ctx.font = '12px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText('QR Code', 100, 90);
+          ctx.fillText('Generation', 100, 110);
+          ctx.fillText('Failed', 100, 130);
+        };
+        img.src = qrApiUrl;
+      }
+    }
+    
+    /**
+     * Set Audience Status (Manual Control)
+     */
+    function setAudienceStatus(status) {
+      const messages = {
+        'starting_soon': 'Starting Soon - Translation will begin when speaking starts',
+        'live': 'Service is Live - Live translation active',
+        'paused': 'Captions will resume when talk starts',
+        'ended': 'Service Ended - Thank you for joining us!'
+      };
+      
+      const message = messages[status] || 'Service status updated';
+      
+      fetch('/api/audience-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, message })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          updateLocalStatusDisplay(status, message);
+          console.log('✅ Audience status updated:', status);
+        } else {
+          alert('Failed to update status: ' + (data.error || 'Unknown error'));
+        }
+      })
+      .catch(error => {
+        console.error('Error updating audience status:', error);
+        alert('Failed to update audience status. Check console for details.');
+      });
+    }
+    
+    /**
+     * Set Custom Audience Message
+     */
+    function setCustomAudienceMessage() {
+      const customInput = document.getElementById('customStatusMessage');
+      const message = customInput.value.trim();
+      
+      if (!message) {
+        alert('Please enter a custom message');
+        return;
+      }
+      
+      fetch('/api/audience-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'custom', message })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          updateLocalStatusDisplay('custom', message);
+          customInput.value = ''; // Clear input
+          console.log('✅ Custom audience message set:', message);
+        } else {
+          alert('Failed to set message: ' + (data.error || 'Unknown error'));
+        }
+      })
+      .catch(error => {
+        console.error('Error setting custom message:', error);
+        alert('Failed to set custom message. Check console for details.');
+      });
+    }
+    
+    /**
+     * Update Local Status Display
+     */
+    function updateLocalStatusDisplay(status, message) {
+      const statusDot = document.getElementById('currentStatusDot');
+      const statusLabel = document.getElementById('currentStatusLabel');
+      const statusMessage = document.getElementById('currentStatusMessage');
+      
+      const statusConfig = {
+        'starting_soon': { icon: '🟡', label: 'Starting Soon' },
+        'live': { icon: '🟢', label: 'Live' },
+        'paused': { icon: '⏸️', label: 'Paused' },
+        'ended': { icon: '⏹️', label: 'Ended' },
+        'custom': { icon: '💬', label: 'Custom' }
+      };
+      
+      const config = statusConfig[status] || statusConfig['custom'];
+      
+      if (statusDot) statusDot.textContent = config.icon;
+      if (statusLabel) statusLabel.textContent = config.label;
+      if (statusMessage) statusMessage.textContent = message;
+    }
+
+    /**
      * Load settings from localStorage
      */
     function loadSettings() {
@@ -2017,8 +2610,21 @@
       connect();
     });
 
-    // Cleanup on unload
-    window.addEventListener('beforeunload', () => {
+    // Warn before closing tab if Soniox is connected
+    window.addEventListener('beforeunload', (e) => {
+      // Check if Soniox is connected (via global status variables)
+      const isSonioxConnected = sonioxStatusText && 
+                                 (sonioxStatusText.textContent.includes('Connected') || 
+                                  sonioxStatusText.textContent.includes('Live'));
+      
+      if (isSonioxConnected) {
+        // Show browser warning
+        e.preventDefault();
+        e.returnValue = 'Soniox connection is active. Closing this tab will stop all translations. Are you sure?';
+        return e.returnValue;
+      }
+      
+      // Cleanup
       stopRecording();
       if (ws) {
         ws.close();
