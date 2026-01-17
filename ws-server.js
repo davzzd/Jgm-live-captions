@@ -188,7 +188,7 @@ const YOUTUBE_CAPTIONS_LANGUAGE = process.env.LANGUAGE || 'en';
 // ===== AUDIENCE SYSTEM =====
 // Token system removed - using simple /audience endpoint
 let audienceCaptionBuffer = []; // Last 6 captions for audience display (kept for backwards compat)
-const AUDIENCE_CAPTION_LIMIT = 6; // Show last 6 captions to audience
+// No limit - show all captions to audience (scrollable)
 
 // Service status tracking (for audience status display)
 let serviceStatus = {
@@ -576,11 +576,8 @@ function broadcastToAudience(text, isFinal = false) {
     const timestamp = new Date().toISOString();
     const caption = { text, timestamp, type: 'caption' };
     
-    // Add to buffer and maintain limit
+    // Add to buffer (no limit - show all captions)
     audienceCaptionBuffer.push(caption);
-    if (audienceCaptionBuffer.length > AUDIENCE_CAPTION_LIMIT) {
-      audienceCaptionBuffer.shift(); // Remove oldest
-    }
     
     // Broadcast to all connected audience viewers
     const data = JSON.stringify(caption);
@@ -2140,9 +2137,8 @@ app.get('/audience/stream', (req, res) => {
         const data = fs.readFileSync(CAPTIONS_LOG_FILE, 'utf8');
         const lines = data.split('\n').filter(line => line.trim());
         
-        // Get last 6 captions from file
-        const recentLines = lines.slice(-AUDIENCE_CAPTION_LIMIT);
-        const recentCaptions = recentLines.map(line => {
+        // Get all captions from file (no limit - fully scrollable)
+        const recentCaptions = lines.map(line => {
           const parts = line.split('\t');
           return {
             type: 'caption',

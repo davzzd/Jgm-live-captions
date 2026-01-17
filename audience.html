@@ -526,7 +526,6 @@
 
   <script>
     // ===== CONFIGURATION =====
-    const MAX_CAPTIONS = 6; // Show last 6 captions
     const AUTO_SCROLL_THRESHOLD = 100; // px from bottom to auto-scroll
     
     // ===== STATE =====
@@ -722,11 +721,7 @@
         // Add new caption
         caption.isNew = true;
         captions.push(caption);
-        
-        // Maintain max limit
-        if (captions.length > MAX_CAPTIONS) {
-          captions.shift();
-        }
+        // No limit - show all captions, scrollable
       }
       
       renderCaptions();
