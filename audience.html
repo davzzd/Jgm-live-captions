@@ -437,9 +437,9 @@
       transform: translateY(0);
     }
     
-    /* ===== SCROLL TO TOP BUTTON ===== */
+    /* ===== SCROLL TO BOTTOM BUTTON ===== */
     
-    .scroll-top {
+    .scroll-bottom {
       position: fixed;
       bottom: 24px;
       right: 24px;
@@ -462,18 +462,18 @@
       font-weight: 600;
     }
     
-    .scroll-top.show {
+    .scroll-bottom.show {
       opacity: 1;
       transform: scale(1) translateY(0);
     }
     
-    .scroll-top:hover {
+    .scroll-bottom:hover {
       background: var(--accent-hover);
       box-shadow: 0 6px 24px rgba(91, 141, 239, 0.5);
       transform: scale(1.05) translateY(-2px);
     }
     
-    .scroll-top:active {
+    .scroll-bottom:active {
       transform: scale(0.95) translateY(0);
     }
   </style>
@@ -521,8 +521,8 @@
     ⚠️ Connection lost. Reconnecting...
   </div>
 
-  <!-- Scroll to Top Button -->
-  <button id="scrollTop" class="scroll-top" aria-label="Scroll to top">↑</button>
+  <!-- Scroll to Bottom Button -->
+  <button id="scrollBottom" class="scroll-bottom" aria-label="Scroll to bottom">↓</button>
 
   <script>
     // ===== CONFIGURATION =====
@@ -544,7 +544,7 @@
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const offlineBanner = document.getElementById('offlineBanner');
-    const scrollTopBtn = document.getElementById('scrollTop');
+    const scrollBottomBtn = document.getElementById('scrollBottom');
     
     // ===== SERVICE STATUS =====
     let currentServiceStatus = 'offline';
@@ -573,11 +573,11 @@
       
       isAtBottom = (scrollHeight - scrollTop - clientHeight) < AUTO_SCROLL_THRESHOLD;
       
-      // Show/hide scroll to top button
-      if (scrollTop > 300) {
-        scrollTopBtn.classList.add('show');
+      // Show/hide scroll to bottom button (show when NOT at bottom)
+      if (!isAtBottom) {
+        scrollBottomBtn.classList.add('show');
       } else {
-        scrollTopBtn.classList.remove('show');
+        scrollBottomBtn.classList.remove('show');
       }
     }
     
@@ -813,8 +813,8 @@
     
     window.addEventListener('scroll', checkScrollPosition);
     
-    scrollTopBtn.addEventListener('click', () => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollBottomBtn.addEventListener('click', () => {
+      scrollToBottom(true);
     });
     
     // Handle page visibility changes

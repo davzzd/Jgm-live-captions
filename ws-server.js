@@ -1108,7 +1108,7 @@ app.get('/transcript', (req, res) => {
                   <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
                 </div>
               </div>
-              <div class="caption-text" data-original="${escapeHtml(c.text).replace(/"/g, '&quot;')}">${escapeHtml(c.text)}</div>
+              <div class="caption-text" data-original="${escapeHtml(c.text).replace(/"/g, '&quot;')}" onclick="if(!this.closest('.caption-item').classList.contains('editing')) editCaption(this.closest('.caption-item').querySelector('.edit-btn'))" style="cursor: pointer;" title="Click to edit">${escapeHtml(c.text)}</div>
             </div>
           `;
         }).join('')
@@ -1308,6 +1308,11 @@ app.get('/transcript', (req, res) => {
               font-size: 14px;
               line-height: 1.6;
               min-height: 20px;
+              cursor: pointer;
+            }
+            .caption-text:hover {
+              background: rgba(78, 201, 176, 0.1);
+              border-radius: 3px;
             }
             .caption-text[contenteditable="true"] {
               background: #1e1e1e;
@@ -1315,6 +1320,7 @@ app.get('/transcript', (req, res) => {
               border: 1px solid #4ec9b0;
               border-radius: 3px;
               outline: none;
+              cursor: text;
             }
             .caption-text[contenteditable="true"]:focus {
               border-color: #5fd4c3;
@@ -1681,6 +1687,22 @@ app.get('/transcript', (req, res) => {
               \`;
               captionItem.appendChild(actionsDiv);
               
+              // Add Enter key handler for instant save
+              const enterHandler = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const saveBtn = actionsDiv.querySelector('.save-btn');
+                  if (saveBtn) {
+                    saveEdit(saveBtn);
+                  }
+                }
+              };
+              captionText.addEventListener('keydown', enterHandler);
+              
+              // Store handler for cleanup
+              captionText._enterHandler = enterHandler;
+              
               // Hide edit button
               button.style.display = 'none';
             }
@@ -1689,6 +1711,12 @@ app.get('/transcript', (req, res) => {
               const captionItem = button.closest('.caption-item');
               const captionText = captionItem.querySelector('.caption-text');
               const originalText = captionText.getAttribute('data-original');
+              
+              // Remove Enter key handler
+              if (captionText._enterHandler) {
+                captionText.removeEventListener('keydown', captionText._enterHandler);
+                delete captionText._enterHandler;
+              }
               
               // Restore original text (decode HTML entities)
               const textarea = document.createElement('textarea');
@@ -1708,13 +1736,8 @@ app.get('/transcript', (req, res) => {
             function deleteCaption(button) {
               const captionItem = button.closest('.caption-item');
               const timestamp = captionItem.getAttribute('data-timestamp');
-              const captionText = captionItem.querySelector('.caption-text').textContent;
               
-              // Confirm deletion
-              if (!confirm(\`Are you sure you want to delete this caption?\\n\\n"\${captionText.substring(0, 100)}\${captionText.length > 100 ? '...' : ''}"\`)) {
-                return;
-              }
-              
+              // Delete immediately - no confirmation for live editing speed
               // Send delete request to server
               fetch('/transcript/delete', {
                 method: 'POST',
@@ -1743,7 +1766,10 @@ app.get('/transcript', (req, res) => {
             }
 
             function saveEdit(button) {
-              const captionItem = button.closest('.caption-item');
+              // Get caption item from button or find currently editing item
+              const captionItem = button ? button.closest('.caption-item') : document.querySelector('.caption-item.editing');
+              if (!captionItem) return;
+              
               const captionText = captionItem.querySelector('.caption-text');
               const newText = captionText.textContent.trim();
               const timestamp = captionItem.getAttribute('data-timestamp');
@@ -1753,9 +1779,17 @@ app.get('/transcript', (req, res) => {
                 return;
               }
               
+              // Remove Enter key handler
+              if (captionText._enterHandler) {
+                captionText.removeEventListener('keydown', captionText._enterHandler);
+                delete captionText._enterHandler;
+              }
+              
               // Disable buttons during save
-              button.disabled = true;
-              button.textContent = '⏳ Saving...';
+              if (button) {
+                button.disabled = true;
+                button.textContent = '⏳ Saving...';
+              }
               
               // Send update to server
               fetch('/transcript/edit', {
@@ -1791,14 +1825,18 @@ app.get('/transcript', (req, res) => {
                   captionItem.querySelector('.edit-btn').style.display = '';
                 } else {
                   alert('Failed to save: ' + (data.error || 'Unknown error'));
-                  button.disabled = false;
-                  button.textContent = '💾 Save';
+                  if (button) {
+                    button.disabled = false;
+                    button.textContent = '💾 Save';
+                  }
                 }
               })
               .catch(err => {
                 alert('Error saving caption: ' + err.message);
-                button.disabled = false;
-                button.textContent = '💾 Save';
+                if (button) {
+                  button.disabled = false;
+                  button.textContent = '💾 Save';
+                }
               });
             }
 
@@ -1843,7 +1881,7 @@ app.get('/transcript', (req, res) => {
                     <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
                   </div>
                 </div>
-                <div class="caption-text" data-original="\${caption.text.replace(/"/g, '&quot;')}">\${caption.text}</div>
+                <div class="caption-text" data-original="\${caption.text.replace(/"/g, '&quot;')}" onclick="if(!this.closest('.caption-item').classList.contains('editing')) editCaption(this.closest('.caption-item').querySelector('.edit-btn'))" style="cursor: pointer;" title="Click to edit">\${caption.text}</div>
               \`;
 
               container.appendChild(captionDiv);
@@ -1894,7 +1932,20 @@ app.post('/transcript/clear', (req, res) => {
     }
     // Also clear in-memory history
     captionHistory.length = 0;
+    audienceCaptionBuffer = [];
+    
+    // Broadcast clear event to all audience viewers
+    const clearEvent = JSON.stringify({ type: 'clear' });
+    audienceSSEClients.forEach(client => {
+      try {
+        client.write(`data: ${clearEvent}\n\n`);
+      } catch (error) {
+        // Client disconnected
+      }
+    });
+    
     logger.info('Captions cleared by user');
+    console.log('🧹 Cleared captions from audience (transcript cleared)');
     res.json({ message: 'All captions cleared successfully' });
   });
 });
@@ -2213,14 +2264,25 @@ app.post('/api/audience-status', (req, res) => {
       fs.writeFileSync(CAPTIONS_LOG_FILE, '', 'utf8');
       captionHistory.length = 0; // Clear in-memory history
       audienceCaptionBuffer = []; // Clear audience buffer
+      
+      // Broadcast clear event to all audience viewers
+      const clearEvent = JSON.stringify({ type: 'clear' });
+      audienceSSEClients.forEach(client => {
+        try {
+          client.write(`data: ${clearEvent}\n\n`);
+        } catch (error) {
+          // Client disconnected
+        }
+      });
+      
       console.log('🧹 Cleared old captions for new service');
     } catch (error) {
       console.error('Failed to clear captions:', error);
     }
   }
   
-  // Clear captions when pausing or when resuming from pause
-  if (status === 'paused' || (serviceStatus.status === 'paused' && (status === 'ready' || status === 'live'))) {
+  // Clear captions when service ends (not when paused)
+  if (status === 'ended') {
     try {
       // Clear in-memory buffers
       captionHistory.length = 0;
@@ -2236,7 +2298,7 @@ app.post('/api/audience-status', (req, res) => {
         }
       });
       
-      console.log('🧹 Cleared captions from audience (pause/resume)');
+      console.log('🧹 Cleared captions from audience (service ended)');
     } catch (error) {
       console.error('Failed to clear captions:', error);
     }
