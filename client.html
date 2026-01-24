@@ -42,6 +42,37 @@
       overflow-y: auto;
     }
 
+    /* Custom Scrollbar for Main Container */
+    .container::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    .container::-webkit-scrollbar-track {
+      background: rgba(4, 13, 18, 0.3);
+      border-radius: 10px;
+      margin: 10px 0;
+    }
+
+    .container::-webkit-scrollbar-thumb {
+      background: rgba(92, 131, 116, 0.5);
+      border-radius: 10px;
+      border: 2px solid rgba(24, 61, 61, 0.8);
+    }
+
+    .container::-webkit-scrollbar-thumb:hover {
+      background: rgba(92, 131, 116, 0.7);
+    }
+
+    .container::-webkit-scrollbar-thumb:active {
+      background: rgba(92, 131, 116, 0.9);
+    }
+
+    /* Firefox scrollbar styling */
+    .container {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(92, 131, 116, 0.5) rgba(4, 13, 18, 0.3);
+    }
+
     /* Settings Sidebar */
     .settings-sidebar {
       width: 400px;
