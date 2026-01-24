@@ -1043,16 +1043,24 @@
       };
       
       eventSource.onerror = (error) => {
-        console.error('Connection error:', error);
-        updateStatus(false);
-        eventSource.close();
-        
-        // Exponential backoff reconnection
-        reconnectAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-        
-        console.log(`Reconnecting in ${delay/1000}s...`);
-        setTimeout(connect, delay);
+        // Check if connection is actually closed (readyState 2 = CLOSED)
+        if (eventSource.readyState === EventSource.CLOSED) {
+          console.log('Connection closed, reconnecting...');
+          updateStatus(false);
+          eventSource.close();
+          
+          // Faster reconnection: 1s, 2s, 4s, 8s, max 10s
+          reconnectAttempts++;
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 10000);
+          
+          console.log(`Reconnecting in ${delay/1000}s...`);
+          setTimeout(() => {
+            connect();
+          }, delay);
+        } else {
+          // Connection is still open or connecting, just log
+          console.log('Connection state:', eventSource.readyState === EventSource.CONNECTING ? 'Connecting...' : 'Open');
+        }
       };
     }
     
