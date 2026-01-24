@@ -1105,6 +1105,7 @@ app.get('/transcript', (req, res) => {
                 </div>
                 <div class="caption-actions">
                   <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                  <button class="replace-btn" onclick="replaceWithTongues(this)" title="Replace with (speaking in tongues)">🔄</button>
                   <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
                 </div>
               </div>
@@ -1278,7 +1279,7 @@ app.get('/transcript', (req, res) => {
               display: flex;
               gap: 6px;
             }
-            .edit-btn, .delete-btn {
+            .edit-btn, .replace-btn, .delete-btn {
               background: transparent;
               border: 1px solid transparent;
               color: #858585;
@@ -1290,6 +1291,7 @@ app.get('/transcript', (req, res) => {
               transition: all 0.2s;
             }
             .caption-item:hover .edit-btn,
+            .caption-item:hover .replace-btn,
             .caption-item:hover .delete-btn {
               opacity: 1;
             }
@@ -1297,6 +1299,11 @@ app.get('/transcript', (req, res) => {
               background: #3e3e42;
               border-color: #4ec9b0;
               color: #4ec9b0;
+            }
+            .replace-btn:hover {
+              background: #3e3e42;
+              border-color: #dcdcaa;
+              color: #dcdcaa;
             }
             .delete-btn:hover {
               background: #3e3e42;
@@ -1733,6 +1740,72 @@ app.get('/transcript', (req, res) => {
               captionItem.querySelector('.edit-btn').style.display = '';
             }
 
+            function replaceWithTongues(button) {
+              const captionItem = button.closest('.caption-item');
+              const timestamp = captionItem.getAttribute('data-timestamp');
+              const newText = '(speaking in tongues)';
+              
+              // Store original text before replacing
+              const captionText = captionItem.querySelector('.caption-text');
+              const originalText = captionText.getAttribute('data-original');
+              const currentText = captionText.textContent;
+              
+              // Replace text instantly
+              captionText.textContent = newText;
+              captionText.setAttribute('data-original', newText.replace(/"/g, '&quot;'));
+              
+              // Mark as edited
+              captionItem.classList.add('edited');
+              
+              // Add edited indicator if not already present
+              if (!captionItem.querySelector('.edited-indicator')) {
+                const timeDiv = captionItem.querySelector('.caption-time');
+                const indicator = document.createElement('span');
+                indicator.className = 'edited-indicator';
+                indicator.textContent = 'EDITED';
+                indicator.title = 'This caption has been manually edited';
+                timeDiv.appendChild(indicator);
+              }
+              
+              // Send update to server immediately
+              fetch('/transcript/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timestamp, newText })
+              })
+              .then(res => res.json())
+              .then(data => {
+                if (!data.success) {
+                  console.error('Failed to save replacement:', data.error);
+                  // Revert on error
+                  if (originalText) {
+                    const textarea = document.createElement('textarea');
+                    textarea.innerHTML = originalText;
+                    captionText.textContent = textarea.value;
+                    captionText.setAttribute('data-original', originalText);
+                  } else {
+                    captionText.textContent = currentText;
+                  }
+                  captionItem.classList.remove('edited');
+                  alert('Failed to save: ' + (data.error || 'Unknown error'));
+                }
+              })
+              .catch(err => {
+                console.error('Error saving replacement:', err);
+                // Revert on error
+                if (originalText) {
+                  const textarea = document.createElement('textarea');
+                  textarea.innerHTML = originalText;
+                  captionText.textContent = textarea.value;
+                  captionText.setAttribute('data-original', originalText);
+                } else {
+                  captionText.textContent = currentText;
+                }
+                captionItem.classList.remove('edited');
+                alert('Error saving replacement: ' + err.message);
+              });
+            }
+
             function deleteCaption(button) {
               const captionItem = button.closest('.caption-item');
               const timestamp = captionItem.getAttribute('data-timestamp');
@@ -1878,6 +1951,7 @@ app.get('/transcript', (req, res) => {
                   </div>
                   <div class="caption-actions">
                     <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                    <button class="replace-btn" onclick="replaceWithTongues(this)" title="Replace with (speaking in tongues)">🔄</button>
                     <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
                   </div>
                 </div>
