@@ -1235,6 +1235,7 @@ app.get('/transcript', (req, res) => {
               border: 1px solid #3e3e42;
               border-radius: 4px;
               padding: 15px;
+              max-width: 100%;
             }
             .caption-item {
               padding: 12px;
@@ -1316,6 +1317,9 @@ app.get('/transcript', (req, res) => {
               line-height: 1.6;
               min-height: 20px;
               cursor: pointer;
+              word-wrap: break-word;
+              word-break: normal;
+              max-width: 100%;
             }
             .caption-text:hover {
               background: rgba(78, 201, 176, 0.1);
@@ -2491,11 +2495,11 @@ wssClients.on('connection', (ws) => {
         console.log(`🎬 Client requested to start Soniox connection: ${sourceLanguage} → ${targetLanguage}`);
         
         // Broadcast to audience that service is starting
-        broadcastServiceStatus('connecting', 'Connecting to translation service...');
+        broadcastServiceStatus('connecting', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
         
         // Validate inputs
         if (!apiKey || apiKey.trim().length === 0) {
-          broadcastServiceStatus('offline', 'Service not started - Configuration error');
+          broadcastServiceStatus('offline', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
           ws.send(JSON.stringify({
             type: 'soniox_status',
             status: 'error',
@@ -3111,7 +3115,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       sonioxConnectionState = 'disconnected';
       const reasonStr = reason?.toString() || 'Unknown reason';
       broadcastSonioxStatus('disconnected', `Connection closed: ${reasonStr} (code: ${code})`);
-      broadcastServiceStatus('offline', 'Connection lost - Reconnecting...');
+      broadcastServiceStatus('offline', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
     }
     
     // Only reconnect if not a normal closure (1000) or going away (1001), and not a manual disconnect

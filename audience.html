@@ -214,62 +214,31 @@
     
     .caption-item {
       width: 100%;
-      max-width: 700px;
+      max-width: 1200px;
       text-align: center;
-      padding: 32px var(--spacing);
+      padding: 20px var(--spacing);
       margin: 0;
       position: relative;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-      opacity: 0.4;
-      filter: blur(1.5px);
-      transform: scale(0.97);
+      transition: color 0.2s ease;
       pointer-events: none;
     }
     
     /* Focused line (center of viewport or last 2 when at bottom) */
     .caption-item.focused {
-      opacity: 1 !important;
-      filter: blur(0px) !important;
-      transform: scale(1) !important;
       pointer-events: auto;
     }
     
-    /* Lines above focused */
-    .caption-item.above-focused {
-      opacity: 0.65 !important;
-      filter: blur(0.8px) !important;
-      transform: scale(0.98) !important;
-    }
-    
-    /* Lines below focused */
-    .caption-item.below-focused {
-      opacity: 0.6 !important;
-      filter: blur(1px) !important;
-      transform: scale(0.98) !important;
-    }
-    
-    /* Far lines (very blurred) */
-    .caption-item.far {
-      opacity: 0.35 !important;
-      filter: blur(2px) !important;
-      transform: scale(0.95) !important;
-    }
-    
-    /* New caption animation */
+    /* New caption animation - simple fade */
     .caption-item.new {
-      animation: lyricAppear 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+      animation: fadeIn 0.3s ease;
     }
     
-    @keyframes lyricAppear {
+    @keyframes fadeIn {
       from {
         opacity: 0;
-        transform: translateY(30px) scale(0.9);
-        filter: blur(10px);
       }
       to {
         opacity: 1;
-        transform: translateY(0) scale(1);
-        filter: blur(0px);
       }
     }
     
@@ -297,40 +266,36 @@
     }
     
     .caption-text {
-      font-size: 32px;
+      font-size: 24px;
       color: #ffffff;
       word-wrap: break-word;
-      line-height: 1.5;
+      word-break: normal;
+      line-height: 1.6;
       font-weight: 500;
-      letter-spacing: -0.5px;
+      letter-spacing: -0.3px;
       text-shadow: 0 2px 20px rgba(0, 0, 0, 0.3);
-      transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: color 0.2s ease;
+      max-width: 100%;
     }
     
     /* Focused line styling */
     .caption-item.focused .caption-text {
-      font-size: 36px;
-      font-weight: 600;
       color: #ffffff;
-      text-shadow: 0 4px 30px rgba(91, 141, 239, 0.4), 0 2px 10px rgba(0, 0, 0, 0.5);
     }
     
-    /* Above focused - slightly smaller */
+    /* Above focused - slightly grey */
     .caption-item.above-focused .caption-text {
-      font-size: 28px;
-      color: rgba(255, 255, 255, 0.7);
+      color: rgba(255, 255, 255, 0.6);
     }
     
-    /* Below focused - slightly smaller */
+    /* Below focused - slightly grey */
     .caption-item.below-focused .caption-text {
-      font-size: 28px;
-      color: rgba(255, 255, 255, 0.65);
+      color: rgba(255, 255, 255, 0.6);
     }
     
-    /* Far lines - much smaller and faded */
+    /* Far lines - more grey */
     .caption-item.far .caption-text {
-      font-size: 24px;
-      color: rgba(255, 255, 255, 0.4);
+      color: rgba(255, 255, 255, 0.5);
     }
     
     /* ===== EMPTY STATE ===== */
@@ -410,20 +375,11 @@
       }
       
       .caption-text {
-        font-size: 36px;
-      }
-      
-      .caption-item.focused .caption-text {
-        font-size: 42px;
-      }
-      
-      .caption-item.above-focused .caption-text,
-      .caption-item.below-focused .caption-text {
-        font-size: 32px;
-      }
-      
-      .caption-item.far .caption-text {
         font-size: 28px;
+      }
+      
+      .caption-item {
+        max-width: 1400px;
       }
       
       .caption-time {
@@ -444,20 +400,11 @@
         height: 40px;
       }
       .caption-text {
-        font-size: 40px;
+        font-size: 32px;
       }
       
-      .caption-item.focused .caption-text {
-        font-size: 48px;
-      }
-      
-      .caption-item.above-focused .caption-text,
-      .caption-item.below-focused .caption-text {
-        font-size: 36px;
-      }
-      
-      .caption-item.far .caption-text {
-        font-size: 30px;
+      .caption-item {
+        max-width: 1600px;
       }
       
       .caption-time {
@@ -474,6 +421,15 @@
     /* ===== MOBILE OPTIMIZATIONS ===== */
     
     @media (max-width: 480px) {
+      .caption-item {
+        padding: 16px 12px;
+        max-width: 100%;
+      }
+      
+      .caption-text {
+        font-size: 20px;
+      }
+      
       .caption-time {
         font-size: 9px;
         top: 6px;
@@ -692,13 +648,7 @@
       const previousStatus = currentServiceStatus;
       currentServiceStatus = status;
       
-      // Clear captions when pausing or when resuming from pause
-      if (status === 'paused' || (previousStatus === 'paused' && (status === 'ready' || status === 'live'))) {
-        captions = [];
-        renderedCaptions.clear();
-        captionsList.innerHTML = '';
-        renderCaptions(true);
-      }
+      // Don't clear captions on pause - they should remain visible
       
       const statusConfig = {
         'offline': { 
@@ -745,39 +695,55 @@
       
       const config = statusConfig[status] || statusConfig['offline'];
       
+      // Default disclaimer message for pre-translation states
+      const disclaimerMessage = 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
+      
+      // Use custom message if provided, otherwise use default or disclaimer
+      let displayMessage = message;
+      if (!message || message === 'Service has not started yet' || message === 'Connecting...' || message.includes('Starting Soon')) {
+        // For pre-translation states, show disclaimer
+        const preTranslationStates = ['offline', 'connecting', 'starting_soon'];
+        if (preTranslationStates.includes(status)) {
+          displayMessage = disclaimerMessage;
+        }
+      }
+      
       serviceStatusIcon.innerHTML = config.icon;
       serviceStatusTitle.textContent = config.title;
-      serviceStatusMessage.textContent = message;
+      serviceStatusMessage.textContent = displayMessage;
       serviceStatusIcon.style.color = config.color;
       
       // Control visibility based on status
-      // Hide captions when service is not active (offline, paused, ended, starting_soon)
-      const hideCaptionStatuses = ['offline', 'paused', 'ended', 'starting_soon'];
+      // Hide captions only when service is offline, ended, or starting_soon (NOT paused)
+      const hideCaptionStatuses = ['offline', 'ended', 'starting_soon'];
       
       if (hideCaptionStatuses.includes(status)) {
         // Service not active - show status message, hide captions
         serviceStatus.style.display = 'block';
         captionsList.style.display = 'none';
         loadingState.style.display = 'none';
-      } else if (status === 'ready' || status === 'live') {
-        // Service is live - show captions if available, otherwise show status
+      } else if (status === 'paused') {
+        // Paused - show captions (don't clear them), but show status message too
+        serviceStatus.style.display = 'block';
         if (captions.length > 0) {
-          serviceStatus.style.display = 'none';
           captionsList.style.display = 'flex';
-          loadingState.style.display = 'none';
         } else {
-          serviceStatus.style.display = 'block';
           captionsList.style.display = 'none';
-          loadingState.style.display = 'none';
         }
-      }
-      
-      // Only do full render if status changed and captions need to be shown
-      if ((status === 'ready' || status === 'live') && captions.length > 0) {
-        // Use requestAnimationFrame to avoid blocking
-        requestAnimationFrame(() => {
-          renderCaptions(captionsList.children.length === 0);
-        });
+        loadingState.style.display = 'none';
+      } else if (status === 'ready' || status === 'live') {
+        // Service is live - always show captions list (captions will arrive via SSE)
+        // Don't wait for captions.length > 0 because they're sent after status
+        serviceStatus.style.display = 'none';
+        captionsList.style.display = 'flex';
+        loadingState.style.display = 'none';
+        
+        // If captions already exist, render them
+        if (captions.length > 0) {
+          requestAnimationFrame(() => {
+            renderCaptions(captionsList.children.length === 0);
+          });
+        }
       }
     }
     
@@ -846,14 +812,23 @@
     let renderedCaptions = new Set();
     
     function renderCaptions(forceFullRender = false) {
-      // Don't show captions if service is not active
-      const hideCaptionStatuses = ['offline', 'paused', 'ended', 'starting_soon'];
+      // Don't show captions if service is offline, ended, or starting_soon
+      // But DO show captions if paused (they should remain visible)
+      const hideCaptionStatuses = ['offline', 'ended', 'starting_soon'];
       
       if (hideCaptionStatuses.includes(currentServiceStatus)) {
         captionsList.style.display = 'none';
         serviceStatus.style.display = 'block';
         loadingState.style.display = 'none';
         renderedCaptions.clear();
+        return;
+      }
+      
+      // If paused but captions exist, show them
+      if (currentServiceStatus === 'paused' && captions.length === 0) {
+        captionsList.style.display = 'none';
+        serviceStatus.style.display = 'block';
+        loadingState.style.display = 'none';
         return;
       }
       
@@ -1036,6 +1011,14 @@
           } else if (data.type === 'caption' || data.text) {
             // Caption update
             addCaption(data);
+            
+            // When ANY caption arrives, automatically show captions (hide status message)
+            // Translation has started, so show captions regardless of status
+            if (captions.length === 1) {
+              serviceStatus.style.display = 'none';
+              captionsList.style.display = 'flex';
+              loadingState.style.display = 'none';
+            }
           }
         } catch (error) {
           console.error('Failed to parse message:', error);
