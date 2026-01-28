@@ -207,7 +207,7 @@
       align-items: center;
       justify-content: flex-start;
       min-height: 100vh;
-      padding: 100px var(--spacing) 300px;
+      padding: 100px var(--spacing) 120px;
       gap: 0;
       position: relative;
     }
@@ -215,12 +215,13 @@
     .caption-item {
       width: 100%;
       max-width: 1200px;
-      text-align: center;
+      text-align: left;
       padding: 20px var(--spacing);
       margin: 0;
       position: relative;
       transition: color 0.2s ease;
       pointer-events: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     }
     
     /* Focused line (center of viewport or last 2 when at bottom) */
@@ -266,13 +267,13 @@
     }
     
     .caption-text {
-      font-size: 24px;
+      font-size: 20px;
       color: #ffffff;
       word-wrap: break-word;
       word-break: normal;
-      line-height: 1.6;
+      line-height: 1.5;
       font-weight: 500;
-      letter-spacing: -0.3px;
+      letter-spacing: -0.2px;
       text-shadow: 0 2px 20px rgba(0, 0, 0, 0.3);
       transition: color 0.2s ease;
       max-width: 100%;
@@ -375,7 +376,7 @@
       }
       
       .caption-text {
-        font-size: 28px;
+        font-size: 22px;
       }
       
       .caption-item {
@@ -400,7 +401,7 @@
         height: 40px;
       }
       .caption-text {
-        font-size: 32px;
+        font-size: 24px;
       }
       
       .caption-item {
@@ -427,7 +428,7 @@
       }
       
       .caption-text {
-        font-size: 20px;
+        font-size: 18px;
       }
       
       .caption-time {
@@ -833,24 +834,24 @@
             item.classList.add('far');
           }
         } else {
-          // When scrolled up: use viewport center focus
-          const viewportCenter = window.innerHeight / 2;
+          // When scrolled up: use lower viewport focus (75% from top, much closer to bottom)
+          const viewportFocusPoint = window.innerHeight * 0.75;
           const rect = item.getBoundingClientRect();
           const itemCenter = rect.top + rect.height / 2;
-          const distance = Math.abs(itemCenter - viewportCenter);
+          const distance = Math.abs(itemCenter - viewportFocusPoint);
           
           if (distance < 120) {
-            // Very close to center - fully focused
+            // Very close to focus point - fully focused
             item.classList.add('focused');
           } else if (distance < 280) {
-            // Close to center - slightly blurred
-            if (itemCenter < viewportCenter) {
+            // Close to focus point - slightly blurred
+            if (itemCenter < viewportFocusPoint) {
               item.classList.add('above-focused');
             } else {
               item.classList.add('below-focused');
             }
           } else {
-            // Far from center - heavily blurred
+            // Far from focus point - heavily blurred
             item.classList.add('far');
           }
         }
