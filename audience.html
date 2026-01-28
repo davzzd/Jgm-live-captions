@@ -578,6 +578,11 @@
     let eventSource = null;
     let reconnectAttempts = 0;
     let isAtBottom = true;
+    let isUserScrolling = false;
+    let scrollTimeout = null;
+    let lastScrollTop = 0;
+    let lastMessageTime = Date.now(); // Track last message received
+    let healthCheckInterval = null; // Connection health monitoring
     
     // ===== DOM ELEMENTS =====
     const captionsList = document.getElementById('captionsList');
@@ -617,14 +622,37 @@
       const clientHeight = document.documentElement.clientHeight;
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       
+      // Detect if this is a user scroll (not programmatic)
+      const scrollDelta = Math.abs(scrollTop - lastScrollTop);
+      lastScrollTop = scrollTop;
+      
+      // If scroll delta is significant, it's likely user-initiated
+      if (scrollDelta > 5) {
+        isUserScrolling = true;
+        // Clear any pending scroll timeout
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        // Reset user scrolling flag after scroll ends
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 150);
+      }
+      
       // Check if at bottom (with threshold)
       const wasAtBottom = isAtBottom;
       isAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
       
-      // If user scrolled up (was at bottom, now not), disable auto-scroll
-      if (wasAtBottom && !isAtBottom) {
-        // User scrolled up - disable auto-scroll
+      // If user manually scrolled up from bottom, disable auto-scroll
+      if (wasAtBottom && !isAtBottom && isUserScrolling) {
+        // User manually scrolled up - disable auto-scroll
         isAtBottom = false;
+      }
+      
+      // If user scrolls back to bottom, re-enable auto-scroll
+      if (!wasAtBottom && isAtBottom && isUserScrolling) {
+        // User scrolled back to bottom - re-enable auto-scroll
+        isAtBottom = true;
       }
       
       // Show/hide scroll to bottom button (show when NOT at bottom)
@@ -639,10 +667,28 @@
     }
     
     function scrollToBottom(smooth = true) {
+      // Mark as programmatic scroll (not user-initiated)
+      isUserScrolling = false;
+      if (scrollTimeout) {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = null;
+      }
+      
+      const targetScroll = document.documentElement.scrollHeight;
       window.scrollTo({
-        top: document.documentElement.scrollHeight,
+        top: targetScroll,
         behavior: smooth ? 'smooth' : 'auto'
       });
+      
+      // Update isAtBottom after scroll
+      setTimeout(() => {
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollHeight = document.documentElement.scrollHeight;
+        const clientHeight = document.documentElement.clientHeight;
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+        isAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
+        lastScrollTop = scrollTop;
+      }, smooth ? 300 : 50);
     }
     
     // ===== CAPTION RENDERING =====
@@ -927,13 +973,23 @@
         updateFocusClasses();
       });
       
-      // Auto-scroll if user is at bottom
-      if (isAtBottom) {
-        requestAnimationFrame(() => {
-          scrollToBottom(true);
-          // Update focus after scroll
-          setTimeout(updateFocusClasses, 300);
-        });
+      // Auto-scroll if user is at bottom (only if not manually scrolling)
+      if (isAtBottom && !isUserScrolling) {
+        // Use a small delay to ensure DOM is updated
+        setTimeout(() => {
+          // Double-check we're still at bottom before scrolling
+          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const scrollHeight = document.documentElement.scrollHeight;
+          const clientHeight = document.documentElement.clientHeight;
+          const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+          
+          if (distanceFromBottom < AUTO_SCROLL_THRESHOLD * 2) {
+            // Still near bottom, safe to auto-scroll
+            scrollToBottom(true);
+            // Update focus after scroll
+            setTimeout(updateFocusClasses, 300);
+          }
+        }, 50);
       }
     }
     
@@ -979,10 +1035,48 @@
       }
     }
     
+    function startConnectionHealthCheck() {
+      // Stop any existing health check
+      stopConnectionHealthCheck();
+      
+      // Check connection health every 5 seconds
+      healthCheckInterval = setInterval(() => {
+        if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+          // Connection not open, health check not needed
+          return;
+        }
+        
+        const timeSinceLastMessage = Date.now() - lastMessageTime;
+        
+        // If no messages for 30+ seconds, connection is likely stale
+        if (timeSinceLastMessage > 30000) {
+          console.warn('Connection health check: No messages for 30+ seconds, reconnecting...');
+          // Reconnect to get fresh connection
+          reconnectAttempts = 0; // Reset attempts for health check reconnect
+          connect();
+        }
+      }, 5000); // Check every 5 seconds
+    }
+    
+    function stopConnectionHealthCheck() {
+      if (healthCheckInterval) {
+        clearInterval(healthCheckInterval);
+        healthCheckInterval = null;
+      }
+    }
+    
     function connect() {
-      // Close existing connection
+      // Stop health check during reconnection
+      stopConnectionHealthCheck();
+      
+      // Close existing connection properly
       if (eventSource) {
-        eventSource.close();
+        try {
+          eventSource.close();
+        } catch (e) {
+          // Ignore errors when closing
+        }
+        eventSource = null;
       }
       
       // Create new SSE connection (no token needed)
@@ -992,9 +1086,15 @@
       eventSource.onopen = () => {
         console.log('Connected to live stream');
         updateStatus(true);
+        lastMessageTime = Date.now(); // Reset timestamp on connection
+        reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+        startConnectionHealthCheck(); // Start monitoring connection health
       };
       
       eventSource.onmessage = (event) => {
+        // Update last message timestamp on every message
+        lastMessageTime = Date.now();
+        
         try {
           const data = JSON.parse(event.data);
           
@@ -1013,6 +1113,7 @@
             deleteCaption(data.timestamp);
           } else if (data.type === 'caption' || data.text) {
             // Caption update
+            // Server sends all existing captions on reconnect, so duplicates are handled by addCaption
             addCaption(data);
             
             // When ANY caption arrives, automatically show captions (hide status message)
@@ -1025,6 +1126,7 @@
           }
         } catch (error) {
           console.error('Failed to parse message:', error);
+          // Continue processing - don't break on one bad message
         }
       };
       
@@ -1033,7 +1135,7 @@
         if (eventSource.readyState === EventSource.CLOSED) {
           console.log('Connection closed, reconnecting...');
           updateStatus(false);
-          eventSource.close();
+          stopConnectionHealthCheck();
           
           // Faster reconnection: 1s, 2s, 4s, 8s, max 10s
           reconnectAttempts++;
@@ -1053,13 +1155,16 @@
     // ===== EVENT LISTENERS =====
     
     // Throttle scroll events for performance
-    let scrollTimeout;
+    let focusUpdateTimeout;
     window.addEventListener('scroll', () => {
       checkScrollPosition();
       // Throttle focus updates
-      clearTimeout(scrollTimeout);
-      scrollTimeout = setTimeout(updateFocusClasses, 50);
+      clearTimeout(focusUpdateTimeout);
+      focusUpdateTimeout = setTimeout(updateFocusClasses, 50);
     }, { passive: true });
+    
+    // Initialize lastScrollTop on page load
+    lastScrollTop = window.pageYOffset || document.documentElement.scrollTop;
     
     // Also update on resize
     window.addEventListener('resize', () => {
@@ -1067,27 +1172,89 @@
     }, { passive: true });
     
     scrollBottomBtn.addEventListener('click', () => {
+      // User clicked scroll to bottom - re-enable auto-scroll
+      isAtBottom = true;
+      isUserScrolling = false;
       scrollToBottom(true);
     });
     
-    // Handle page visibility changes
+    // Handle page visibility changes (tab background/foreground)
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && !eventSource) {
-        connect();
+      if (document.visibilityState === 'visible') {
+        // Tab became visible - check connection health
+        const timeSinceLastMessage = Date.now() - lastMessageTime;
+        
+        // Re-check scroll position and focus
+        checkScrollPosition();
+        updateFocusClasses();
+        
+        // If no connection or connection appears stale, reconnect
+        if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+          console.log('Tab visible - no connection, reconnecting...');
+          connect();
+        } else if (timeSinceLastMessage > 10000) {
+          // Connection exists but no messages for 10+ seconds - likely stale
+          console.log('Tab visible - connection appears stale, reconnecting...');
+          reconnectAttempts = 0; // Reset attempts for visibility reconnect
+          connect();
+        } else {
+          // Connection seems OK, just restart health check
+          startConnectionHealthCheck();
+        }
+      } else {
+        // Tab hidden - stop health checks to save resources
+        stopConnectionHealthCheck();
+      }
+    });
+    
+    // Handle page show (mobile browsers - screen unlock, back/forward cache)
+    window.addEventListener('pageshow', (event) => {
+      // Page was restored from back/forward cache or screen unlock
+      if (event.persisted || document.visibilityState === 'visible') {
+        const timeSinceLastMessage = Date.now() - lastMessageTime;
+        
+        // Re-sync UI state
+        checkScrollPosition();
+        updateFocusClasses();
+        
+        // If been away for a while, reconnect
+        if (timeSinceLastMessage > 5000) {
+          console.log('Page shown - reconnecting after being away...');
+          reconnectAttempts = 0; // Reset attempts
+          connect();
+        } else if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+          connect();
+        } else {
+          startConnectionHealthCheck();
+        }
+      }
+    });
+    
+    // Handle window focus (desktop browsers)
+    window.addEventListener('focus', () => {
+      const timeSinceLastMessage = Date.now() - lastMessageTime;
+      
+      if (timeSinceLastMessage > 10000) {
+        console.log('Window focused - checking connection...');
+        if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+          connect();
+        } else {
+          startConnectionHealthCheck();
+        }
       }
     });
     
     // Handle online/offline events
     window.addEventListener('online', () => {
-      console.log('Network online');
-      if (!eventSource) {
-        connect();
-      }
+      console.log('Network online - reconnecting...');
+      reconnectAttempts = 0; // Reset attempts
+      connect();
     });
     
     window.addEventListener('offline', () => {
       console.log('Network offline');
       updateStatus(false);
+      stopConnectionHealthCheck();
     });
     
     // ===== INITIALIZATION =====
@@ -1095,11 +1262,21 @@
     // Start connection
     connect();
     
+    // Initialize scroll state
+    lastScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    isAtBottom = true; // Assume at bottom on initial load
+    isUserScrolling = false;
+    
     // Initial scroll check
     checkScrollPosition();
     
     // Initial focus update
     setTimeout(updateFocusClasses, 200);
+    
+    // Ensure we're at bottom on initial load
+    setTimeout(() => {
+      scrollToBottom(false); // Instant scroll to bottom on load
+    }, 100);
   </script>
 </body>
 </html>
