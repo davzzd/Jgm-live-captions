@@ -581,6 +581,7 @@
     let isAtBottom = true;
     let isUserScrolling = false;
     let scrollTimeout = null;
+    let autoScrollTimeout = null; // Debounced auto-scroll timeout
     let lastScrollTop = 0;
     let lastMessageTime = Date.now(); // Track last message received
     let healthCheckInterval = null; // Connection health monitoring
@@ -624,36 +625,52 @@
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       
       // Detect if this is a user scroll (not programmatic)
-      const scrollDelta = Math.abs(scrollTop - lastScrollTop);
+      const scrollDelta = scrollTop - lastScrollTop;
+      const absDelta = Math.abs(scrollDelta);
+      
+      // Only detect as user scrolling if:
+      // 1. Scroll delta is significant (> 10px to avoid false positives from auto-scroll)
+      // 2. User scrolled UP (not down, which could be auto-scroll)
+      // 3. Not already at bottom (auto-scroll only happens when at bottom)
+      const isScrollingUp = scrollDelta < -10;
+      const isScrollingDown = scrollDelta > 10;
+      const wasAtBottom = isAtBottom;
+      const nowAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
+      
+      // User manually scrolled UP from bottom - disable auto-scroll
+      if (wasAtBottom && !nowAtBottom && isScrollingUp && absDelta > 10) {
+        isUserScrolling = true;
+        isAtBottom = false;
+        // Clear any pending auto-scroll
+        if (autoScrollTimeout) {
+          clearTimeout(autoScrollTimeout);
+          autoScrollTimeout = null;
+        }
+      } else if (nowAtBottom) {
+        // At bottom - always enable auto-scroll unless user explicitly scrolled up
+        if (!(wasAtBottom && !nowAtBottom && isScrollingUp)) {
+          isAtBottom = true;
+          // If user scrolled back to bottom, reset user scrolling flag
+          if (!wasAtBottom && nowAtBottom && isUserScrolling) {
+            isUserScrolling = false;
+          }
+        }
+      }
+      
+      // Update lastScrollTop
       lastScrollTop = scrollTop;
       
-      // If scroll delta is significant, it's likely user-initiated
-      if (scrollDelta > 5) {
-        isUserScrolling = true;
-        // Clear any pending scroll timeout
-        if (scrollTimeout) {
-          clearTimeout(scrollTimeout);
-        }
-        // Reset user scrolling flag after scroll ends
+      // Clear/reset user scrolling timeout
+      if (scrollTimeout) {
+        clearTimeout(scrollTimeout);
+      }
+      if (isUserScrolling) {
         scrollTimeout = setTimeout(() => {
-          isUserScrolling = false;
-        }, 150);
-      }
-      
-      // Check if at bottom (with threshold)
-      const wasAtBottom = isAtBottom;
-      isAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
-      
-      // If user manually scrolled up from bottom, disable auto-scroll
-      if (wasAtBottom && !isAtBottom && isUserScrolling) {
-        // User manually scrolled up - disable auto-scroll
-        isAtBottom = false;
-      }
-      
-      // If user scrolls back to bottom, re-enable auto-scroll
-      if (!wasAtBottom && isAtBottom && isUserScrolling) {
-        // User scrolled back to bottom - re-enable auto-scroll
-        isAtBottom = true;
+          // Only reset if still at bottom (user might have scrolled back)
+          if (isAtBottom) {
+            isUserScrolling = false;
+          }
+        }, 200);
       }
       
       // Show/hide scroll to bottom button (show when NOT at bottom)
@@ -669,19 +686,21 @@
     
     function scrollToBottom(smooth = true) {
       // Mark as programmatic scroll (not user-initiated)
-      isUserScrolling = false;
-      if (scrollTimeout) {
-        clearTimeout(scrollTimeout);
-        scrollTimeout = null;
-      }
+      // Don't set isUserScrolling to false here - let checkScrollPosition handle it
       
       const targetScroll = document.documentElement.scrollHeight;
+      
       window.scrollTo({
         top: targetScroll,
         behavior: smooth ? 'smooth' : 'auto'
       });
       
-      // Update isAtBottom after scroll
+      // Immediately update isAtBottom for smooth scrolling
+      // This ensures rapid updates don't miss the bottom state
+      isAtBottom = true;
+      lastScrollTop = targetScroll;
+      
+      // Verify after scroll completes
       setTimeout(() => {
         const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
         const scrollHeight = document.documentElement.scrollHeight;
@@ -975,22 +994,31 @@
       });
       
       // Auto-scroll if user is at bottom (only if not manually scrolling)
+      // Use debounced approach to handle rapid updates
       if (isAtBottom && !isUserScrolling) {
-        // Use a small delay to ensure DOM is updated
-        setTimeout(() => {
-          // Double-check we're still at bottom before scrolling
-          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-          const scrollHeight = document.documentElement.scrollHeight;
-          const clientHeight = document.documentElement.clientHeight;
-          const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-          
-          if (distanceFromBottom < AUTO_SCROLL_THRESHOLD * 2) {
-            // Still near bottom, safe to auto-scroll
-            scrollToBottom(true);
-            // Update focus after scroll
-            setTimeout(updateFocusClasses, 300);
+        // Clear any pending auto-scroll to batch rapid updates
+        if (autoScrollTimeout) {
+          clearTimeout(autoScrollTimeout);
+        }
+        
+        // Schedule auto-scroll with minimal delay to batch rapid updates
+        autoScrollTimeout = setTimeout(() => {
+          // Double-check user hasn't scrolled during the delay
+          if (isUserScrolling) {
+            return; // User scrolled, don't auto-scroll
           }
-        }, 50);
+          
+          // Always scroll to bottom when at bottom (aggressive auto-scroll)
+          // Use requestAnimationFrame for smooth, immediate scrolling
+          requestAnimationFrame(() => {
+            // Final check before scrolling
+            if (!isUserScrolling) {
+              scrollToBottom(true);
+              // Update focus after scroll completes
+              setTimeout(updateFocusClasses, 100);
+            }
+          });
+        }, 5); // Very short delay (5ms) to batch rapid updates but still be responsive
       }
     }
     

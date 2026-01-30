@@ -619,8 +619,14 @@ function broadcastServiceStatus(status, message) {
 /**
  * Serve the client.html file as default homepage
  */
+// Home page - serve audience page
 app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/client.html');
+  res.sendFile(path.join(__dirname, 'audience.html'));
+});
+
+// Client/admin page
+app.get('/client', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client.html'));
 });
 
 /**
@@ -3508,7 +3514,8 @@ server.listen(PORT, () => {
   console.log(`🌐 Open http://localhost:${PORT} in Resolume Browser Source`);
   console.log(`📊 Server logs: http://localhost:${PORT}/logs`);
   console.log(`📝 Caption transcript: http://localhost:${PORT}/transcript`);
-  console.log(`👥 Audience viewer: http://localhost:${PORT}/audience`);
+  console.log(`👥 Audience viewer: http://localhost:${PORT} (home page)`);
+  console.log(`🔧 Admin/Client page: http://localhost:${PORT}/client`);
   console.log(`⏱️  Optimized for long-running sessions (3+ hours)`);
 });
 
