@@ -328,16 +328,23 @@
     
     .empty-state-text {
       font-size: 18px;
-      line-height: 1.6;
+      line-height: 1.8;
       color: var(--text-secondary);
     }
     
     .empty-state-text strong {
       display: block;
-      font-size: 20px;
+      font-size: 22px;
       color: var(--text-primary);
       margin-bottom: var(--spacing-sm);
       font-weight: 600;
+    }
+    
+    .empty-state-text span {
+      font-size: 16px;
+      line-height: 1.8;
+      color: rgba(255, 255, 255, 0.85);
+      font-weight: 500;
     }
     
     /* ===== LOADING STATE ===== */
@@ -435,6 +442,23 @@
         font-size: 9px;
         top: 6px;
         right: var(--spacing);
+      }
+      
+      .empty-state-text {
+        font-size: 16px;
+      }
+      
+      .empty-state-text strong {
+        font-size: 18px;
+      }
+      
+      .empty-state-text span {
+        font-size: 15px;
+      }
+      
+      .loading-disclaimer {
+        font-size: 15px !important;
+        max-width: 90% !important;
       }
     }
     
@@ -540,7 +564,8 @@
     <div id="loadingState" class="loading">
       <div class="loading-spinner"></div>
       <div class="loading-text">Connecting to live stream...</div>
-      <div class="loading-disclaimer" style="margin-top: 20px; font-size: 13px; color: rgba(255, 255, 255, 0.6); line-height: 1.6; max-width: 500px; margin-left: auto; margin-right: auto;">
+      <div class="loading-disclaimer" style="margin-top: 30px; font-size: 16px; color: rgba(255, 255, 255, 0.8); line-height: 1.8; max-width: 600px; margin-left: auto; margin-right: auto; font-weight: 500;">
+        This translation service is only for the audience present in the church and not for online viewers.<br><br>
         Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.
       </div>
     </div>
@@ -765,21 +790,27 @@
       const config = statusConfig[status] || statusConfig['offline'];
       
       // Default disclaimer message for pre-translation states
-      const disclaimerMessage = 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
+      const disclaimerMessage = 'This translation service is only for the audience present in the church and not for online viewers.<br><br>Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
       
       // Use custom message if provided, otherwise use default or disclaimer
       let displayMessage = message;
+      let useHTML = false;
       if (!message || message === 'Service has not started yet' || message === 'Connecting...' || message.includes('Starting Soon')) {
         // For pre-translation states, show disclaimer
         const preTranslationStates = ['offline', 'connecting', 'starting_soon'];
         if (preTranslationStates.includes(status)) {
           displayMessage = disclaimerMessage;
+          useHTML = true;
         }
       }
       
       serviceStatusIcon.innerHTML = config.icon;
       serviceStatusTitle.textContent = config.title;
-      serviceStatusMessage.textContent = displayMessage;
+      if (useHTML) {
+        serviceStatusMessage.innerHTML = displayMessage;
+      } else {
+        serviceStatusMessage.textContent = displayMessage;
+      }
       serviceStatusIcon.style.color = config.color;
       
       // Control visibility based on status
