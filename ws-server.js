@@ -114,13 +114,14 @@ console.warn = function(...args) {
  * @param {string} text - The caption text
  * @param {boolean} isFinal - Whether this is a final caption
  */
-function logCaption(text, isFinal = true) {
+function logCaption(text, isFinal = true, tag = '') {
   if (!text || !isFinal) return; // Only log final captions
 
   const timestamp = new Date().toISOString();
   const entry = {
     timestamp,
     text,
+    tag: tag || '', // Include tag in entry for SSE
     session: new Date().toISOString().split('T')[0] // Date as session ID
   };
 
@@ -133,7 +134,7 @@ function logCaption(text, isFinal = true) {
   // Write to file (append) - file grows indefinitely, no auto-clear
   // File is only cleared manually via /transcript/clear endpoint
   // Format: timestamp\ttext\ttag (tag is empty for new captions)
-  const logLine = `${timestamp}\t${text}\t\n`;
+  const logLine = `${timestamp}\t${text}\t${tag || ''}\n`;
   try {
     if (captionsStream && captionsStream.writable && !captionsStream.destroyed) {
       captionsStream.write(logLine);
@@ -2091,17 +2092,31 @@ app.get('/transcript', (req, res) => {
               const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
               const time = adjustedDate.toLocaleTimeString();
               const date = adjustedDate.toLocaleDateString();
+              
+              // Get tag from caption (default to empty string)
+              const tag = caption.tag || '';
+              const tagDisplay = tag ? \`<span class="caption-tag tag-\${tag.replace(/\\s+/g, '-')}">[\${tag}]</span>\` : '';
 
               const captionDiv = document.createElement('div');
               captionDiv.className = 'caption-item';
               captionDiv.setAttribute('data-timestamp', caption.timestamp); // Store original timestamp
+              captionDiv.setAttribute('data-tag', tag); // Store tag for tag buttons
               captionDiv.innerHTML = \`
                 <div class="caption-header">
                   <div class="caption-time">
+                    \${tagDisplay}
                     <span class="date">\${date}</span>
                     <span class="time">\${time}</span>
                   </div>
                   <div class="caption-actions">
+                    <div class="tag-buttons">
+                      <button class="tag-btn \${tag === 'prophecy' ? 'active' : ''}" onclick="setTag(this, 'prophecy')" title="Tag as prophecy">🔮</button>
+                      <button class="tag-btn \${tag === 'healing declaration' ? 'active' : ''}" onclick="setTag(this, 'healing declaration')" title="Tag as healing declaration">💚</button>
+                      <button class="tag-btn \${tag === 'scripture' ? 'active' : ''}" onclick="setTag(this, 'scripture')" title="Tag as scripture">📖</button>
+                      <button class="tag-btn \${tag === 'person call out' ? 'active' : ''}" onclick="setTag(this, 'person call out')" title="Tag as person call out">👤</button>
+                      <button class="tag-btn \${tag === 'ignore' ? 'active' : ''}" onclick="setTag(this, 'ignore')" title="Tag as ignore">🚫</button>
+                      \${tag ? \`<button class="tag-btn tag-clear" onclick="setTag(this, '')" title="Remove tag">✕</button>\` : ''}
+                    </div>
                     <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
                     <button class="replace-btn" onclick="replaceWithTongues(this)" title="Replace with (speaking in tongues)">🔄</button>
                     <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
