@@ -598,6 +598,7 @@
   <script>
     // ===== CONFIGURATION =====
     const AUTO_SCROLL_THRESHOLD = 100; // px from bottom to auto-scroll
+    const MAX_CAPTIONS = 50; // Maximum number of captions to keep in memory/DOM (sliding window) - optimized for mobile
     
     // ===== STATE =====
     let captions = [];
@@ -911,6 +912,38 @@
     // Track rendered captions to avoid re-rendering
     let renderedCaptions = new Set();
     
+    // ===== SLIDING WINDOW MANAGEMENT =====
+    
+    function removeOldCaptions() {
+      // Remove oldest captions if we exceed the limit
+      if (captions.length > MAX_CAPTIONS) {
+        const removeCount = captions.length - MAX_CAPTIONS;
+        const removedCaptions = captions.splice(0, removeCount);
+        
+        // Batch DOM removal for better performance
+        const elementsToRemove = [];
+        
+        removedCaptions.forEach(caption => {
+          const element = captionsList.querySelector(`[data-timestamp="${caption.timestamp}"]`);
+          if (element) {
+            elementsToRemove.push(element);
+            renderedCaptions.delete(caption.timestamp);
+          }
+        });
+        
+        // Remove all elements at once (more efficient than individual removes)
+        elementsToRemove.forEach(element => element.remove());
+        
+        // Update data-index attributes for remaining elements (only if we removed any)
+        if (elementsToRemove.length > 0) {
+          const remainingElements = captionsList.querySelectorAll('.caption-item');
+          remainingElements.forEach((element, index) => {
+            element.setAttribute('data-index', index);
+          });
+        }
+      }
+    }
+    
     function renderCaptions(forceFullRender = false) {
       // Don't show captions if service is offline, ended, or starting_soon
       // But DO show captions if paused (they should remain visible)
@@ -943,6 +976,9 @@
       loadingState.style.display = 'none';
       serviceStatus.style.display = 'none';
       captionsList.style.display = 'flex';
+      
+      // Apply sliding window before rendering
+      removeOldCaptions();
       
       // Only do full render if forced (initial load, clear, etc.)
       if (forceFullRender || captionsList.children.length === 0) {
@@ -992,6 +1028,9 @@
         // Add new caption - append to DOM directly, no re-render
         caption.isNew = true;
         captions.push(caption);
+        
+        // Apply sliding window: remove old captions if we exceed limit
+        removeOldCaptions();
         
         // Create and append new element
         const newElement = document.createElement('div');

@@ -2474,16 +2474,19 @@ app.get('/audience/stream', (req, res) => {
   // Only send captions if service is live/ready (not offline, starting_soon, paused, or ended)
   const activeStatuses = ['ready', 'live'];
   if (activeStatuses.includes(serviceStatus.status)) {
-    // Read last N captions from file (not memory buffer) to ensure sync with edits/deletes
+    // Read last N captions from file (optimized for mobile - only send last 50)
+    const MAX_INITIAL_CAPTIONS = 50; // Limit initial load for mobile performance
     try {
       if (fs.existsSync(CAPTIONS_LOG_FILE)) {
         const data = fs.readFileSync(CAPTIONS_LOG_FILE, 'utf8');
         const lines = data.split('\n').filter(line => line.trim());
         
-        // Get all captions from file (no limit - fully scrollable)
+        // Only process last N lines (much faster for large files)
+        const recentLines = lines.slice(-MAX_INITIAL_CAPTIONS);
+        
         // Parse captions - format: timestamp\ttext\ttag
         // Tags are NOT sent to audience, only text
-        const recentCaptions = lines.map(line => {
+        const recentCaptions = recentLines.map(line => {
           const parts = line.split('\t');
           if (parts.length >= 3) {
             // Has tag: timestamp, text (may contain tabs), tag
@@ -2509,12 +2512,12 @@ app.get('/audience/stream', (req, res) => {
           }
         });
         
-        // Send recent captions to new viewer
+        // Send recent captions to new viewer (only last 50 for fast loading)
         recentCaptions.forEach(caption => {
           res.write(`data: ${JSON.stringify(caption)}\n\n`);
         });
         
-        // Also update memory buffer to match file (ensures consistency)
+        // Also update memory buffer to match what we sent (ensures consistency)
         audienceCaptionBuffer = recentCaptions;
       }
     } catch (error) {
