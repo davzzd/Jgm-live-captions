@@ -616,10 +616,17 @@ function broadcastServiceStatus(status, message) {
 }
 
 /**
- * Serve the client.html file as default homepage
+ * Serve the audience.html file as default homepage
  */
 app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/client.html');
+  res.sendFile(path.join(__dirname, 'audience.html'));
+});
+
+/**
+ * Serve the client.html file (admin panel)
+ */
+app.get('/client', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client.html'));
 });
 
 /**
