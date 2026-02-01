@@ -207,7 +207,7 @@
       align-items: center;
       justify-content: flex-start;
       min-height: 100vh;
-      padding: 100px var(--spacing) 120px;
+      padding: 100px var(--spacing) 300px;
       gap: 0;
       position: relative;
     }
@@ -215,13 +215,12 @@
     .caption-item {
       width: 100%;
       max-width: 1200px;
-      text-align: left;
+      text-align: center;
       padding: 20px var(--spacing);
       margin: 0;
       position: relative;
       transition: color 0.2s ease;
       pointer-events: none;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     }
     
     /* Focused line (center of viewport or last 2 when at bottom) */
@@ -267,13 +266,13 @@
     }
     
     .caption-text {
-      font-size: 20px;
+      font-size: 24px;
       color: #ffffff;
       word-wrap: break-word;
       word-break: normal;
-      line-height: 1.5;
+      line-height: 1.6;
       font-weight: 500;
-      letter-spacing: -0.2px;
+      letter-spacing: -0.3px;
       text-shadow: 0 2px 20px rgba(0, 0, 0, 0.3);
       transition: color 0.2s ease;
       max-width: 100%;
@@ -328,23 +327,16 @@
     
     .empty-state-text {
       font-size: 18px;
-      line-height: 1.8;
+      line-height: 1.6;
       color: var(--text-secondary);
     }
     
     .empty-state-text strong {
       display: block;
-      font-size: 22px;
+      font-size: 20px;
       color: var(--text-primary);
       margin-bottom: var(--spacing-sm);
       font-weight: 600;
-    }
-    
-    .empty-state-text span {
-      font-size: 16px;
-      line-height: 1.8;
-      color: rgba(255, 255, 255, 0.85);
-      font-weight: 500;
     }
     
     /* ===== LOADING STATE ===== */
@@ -383,7 +375,7 @@
       }
       
       .caption-text {
-        font-size: 22px;
+        font-size: 28px;
       }
       
       .caption-item {
@@ -408,7 +400,7 @@
         height: 40px;
       }
       .caption-text {
-        font-size: 24px;
+        font-size: 32px;
       }
       
       .caption-item {
@@ -435,30 +427,13 @@
       }
       
       .caption-text {
-        font-size: 18px;
+        font-size: 20px;
       }
       
       .caption-time {
         font-size: 9px;
         top: 6px;
         right: var(--spacing);
-      }
-      
-      .empty-state-text {
-        font-size: 16px;
-      }
-      
-      .empty-state-text strong {
-        font-size: 18px;
-      }
-      
-      .empty-state-text span {
-        font-size: 15px;
-      }
-      
-      .loading-disclaimer {
-        font-size: 15px !important;
-        max-width: 90% !important;
       }
     }
     
@@ -564,8 +539,7 @@
     <div id="loadingState" class="loading">
       <div class="loading-spinner"></div>
       <div class="loading-text">Connecting to live stream...</div>
-      <div class="loading-disclaimer" style="margin-top: 30px; font-size: 16px; color: rgba(255, 255, 255, 0.8); line-height: 1.8; max-width: 600px; margin-left: auto; margin-right: auto; font-weight: 500;">
-        This translation service is only for the audience present in the church and not for online viewers.<br><br>
+      <div class="loading-disclaimer" style="margin-top: 20px; font-size: 13px; color: rgba(255, 255, 255, 0.6); line-height: 1.6; max-width: 500px; margin-left: auto; margin-right: auto;">
         Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.
       </div>
     </div>
@@ -598,6 +572,7 @@
   <script>
     // ===== CONFIGURATION =====
     const AUTO_SCROLL_THRESHOLD = 100; // px from bottom to auto-scroll
+    const MAX_CAPTIONS = 200; // Maximum number of captions to keep in memory/DOM (sliding window)
     
     // ===== STATE =====
     let captions = [];
@@ -606,7 +581,6 @@
     let isAtBottom = true;
     let isUserScrolling = false;
     let scrollTimeout = null;
-    let autoScrollTimeout = null; // Debounced auto-scroll timeout
     let lastScrollTop = 0;
     let lastMessageTime = Date.now(); // Track last message received
     let healthCheckInterval = null; // Connection health monitoring
@@ -650,52 +624,36 @@
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       
       // Detect if this is a user scroll (not programmatic)
-      const scrollDelta = scrollTop - lastScrollTop;
-      const absDelta = Math.abs(scrollDelta);
-      
-      // Only detect as user scrolling if:
-      // 1. Scroll delta is significant (> 10px to avoid false positives from auto-scroll)
-      // 2. User scrolled UP (not down, which could be auto-scroll)
-      // 3. Not already at bottom (auto-scroll only happens when at bottom)
-      const isScrollingUp = scrollDelta < -10;
-      const isScrollingDown = scrollDelta > 10;
-      const wasAtBottom = isAtBottom;
-      const nowAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
-      
-      // User manually scrolled UP from bottom - disable auto-scroll
-      if (wasAtBottom && !nowAtBottom && isScrollingUp && absDelta > 10) {
-        isUserScrolling = true;
-        isAtBottom = false;
-        // Clear any pending auto-scroll
-        if (autoScrollTimeout) {
-          clearTimeout(autoScrollTimeout);
-          autoScrollTimeout = null;
-        }
-      } else if (nowAtBottom) {
-        // At bottom - always enable auto-scroll unless user explicitly scrolled up
-        if (!(wasAtBottom && !nowAtBottom && isScrollingUp)) {
-          isAtBottom = true;
-          // If user scrolled back to bottom, reset user scrolling flag
-          if (!wasAtBottom && nowAtBottom && isUserScrolling) {
-            isUserScrolling = false;
-          }
-        }
-      }
-      
-      // Update lastScrollTop
+      const scrollDelta = Math.abs(scrollTop - lastScrollTop);
       lastScrollTop = scrollTop;
       
-      // Clear/reset user scrolling timeout
-      if (scrollTimeout) {
-        clearTimeout(scrollTimeout);
-      }
-      if (isUserScrolling) {
+      // If scroll delta is significant, it's likely user-initiated
+      if (scrollDelta > 5) {
+        isUserScrolling = true;
+        // Clear any pending scroll timeout
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        // Reset user scrolling flag after scroll ends
         scrollTimeout = setTimeout(() => {
-          // Only reset if still at bottom (user might have scrolled back)
-          if (isAtBottom) {
-            isUserScrolling = false;
-          }
-        }, 200);
+          isUserScrolling = false;
+        }, 150);
+      }
+      
+      // Check if at bottom (with threshold)
+      const wasAtBottom = isAtBottom;
+      isAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
+      
+      // If user manually scrolled up from bottom, disable auto-scroll
+      if (wasAtBottom && !isAtBottom && isUserScrolling) {
+        // User manually scrolled up - disable auto-scroll
+        isAtBottom = false;
+      }
+      
+      // If user scrolls back to bottom, re-enable auto-scroll
+      if (!wasAtBottom && isAtBottom && isUserScrolling) {
+        // User scrolled back to bottom - re-enable auto-scroll
+        isAtBottom = true;
       }
       
       // Show/hide scroll to bottom button (show when NOT at bottom)
@@ -711,21 +669,19 @@
     
     function scrollToBottom(smooth = true) {
       // Mark as programmatic scroll (not user-initiated)
-      // Don't set isUserScrolling to false here - let checkScrollPosition handle it
+      isUserScrolling = false;
+      if (scrollTimeout) {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = null;
+      }
       
       const targetScroll = document.documentElement.scrollHeight;
-      
       window.scrollTo({
         top: targetScroll,
         behavior: smooth ? 'smooth' : 'auto'
       });
       
-      // Immediately update isAtBottom for smooth scrolling
-      // This ensures rapid updates don't miss the bottom state
-      isAtBottom = true;
-      lastScrollTop = targetScroll;
-      
-      // Verify after scroll completes
+      // Update isAtBottom after scroll
       setTimeout(() => {
         const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
         const scrollHeight = document.documentElement.scrollHeight;
@@ -790,27 +746,21 @@
       const config = statusConfig[status] || statusConfig['offline'];
       
       // Default disclaimer message for pre-translation states
-      const disclaimerMessage = 'This translation service is only for the audience present in the church and not for online viewers.<br><br>Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
+      const disclaimerMessage = 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
       
       // Use custom message if provided, otherwise use default or disclaimer
       let displayMessage = message;
-      let useHTML = false;
       if (!message || message === 'Service has not started yet' || message === 'Connecting...' || message.includes('Starting Soon')) {
         // For pre-translation states, show disclaimer
         const preTranslationStates = ['offline', 'connecting', 'starting_soon'];
         if (preTranslationStates.includes(status)) {
           displayMessage = disclaimerMessage;
-          useHTML = true;
         }
       }
       
       serviceStatusIcon.innerHTML = config.icon;
       serviceStatusTitle.textContent = config.title;
-      if (useHTML) {
-        serviceStatusMessage.innerHTML = displayMessage;
-      } else {
-        serviceStatusMessage.textContent = displayMessage;
-      }
+      serviceStatusMessage.textContent = displayMessage;
       serviceStatusIcon.style.color = config.color;
       
       // Control visibility based on status
@@ -884,24 +834,24 @@
             item.classList.add('far');
           }
         } else {
-          // When scrolled up: use lower viewport focus (75% from top, much closer to bottom)
-          const viewportFocusPoint = window.innerHeight * 0.75;
+          // When scrolled up: use viewport center focus
+          const viewportCenter = window.innerHeight / 2;
           const rect = item.getBoundingClientRect();
           const itemCenter = rect.top + rect.height / 2;
-          const distance = Math.abs(itemCenter - viewportFocusPoint);
+          const distance = Math.abs(itemCenter - viewportCenter);
           
           if (distance < 120) {
-            // Very close to focus point - fully focused
+            // Very close to center - fully focused
             item.classList.add('focused');
           } else if (distance < 280) {
-            // Close to focus point - slightly blurred
-            if (itemCenter < viewportFocusPoint) {
+            // Close to center - slightly blurred
+            if (itemCenter < viewportCenter) {
               item.classList.add('above-focused');
             } else {
               item.classList.add('below-focused');
             }
           } else {
-            // Far from focus point - heavily blurred
+            // Far from center - heavily blurred
             item.classList.add('far');
           }
         }
@@ -910,6 +860,38 @@
     
     // Track rendered captions to avoid re-rendering
     let renderedCaptions = new Set();
+    
+    // ===== SLIDING WINDOW MANAGEMENT =====
+    
+    function removeOldCaptions() {
+      // Remove oldest captions if we exceed the limit
+      if (captions.length > MAX_CAPTIONS) {
+        const removeCount = captions.length - MAX_CAPTIONS;
+        const removedCaptions = captions.splice(0, removeCount);
+        
+        // Batch DOM removal for better performance
+        const elementsToRemove = [];
+        
+        removedCaptions.forEach(caption => {
+          const element = captionsList.querySelector(`[data-timestamp="${caption.timestamp}"]`);
+          if (element) {
+            elementsToRemove.push(element);
+            renderedCaptions.delete(caption.timestamp);
+          }
+        });
+        
+        // Remove all elements at once (more efficient than individual removes)
+        elementsToRemove.forEach(element => element.remove());
+        
+        // Update data-index attributes for remaining elements (only if we removed any)
+        if (elementsToRemove.length > 0) {
+          const remainingElements = captionsList.querySelectorAll('.caption-item');
+          remainingElements.forEach((element, index) => {
+            element.setAttribute('data-index', index);
+          });
+        }
+      }
+    }
     
     function renderCaptions(forceFullRender = false) {
       // Don't show captions if service is offline, ended, or starting_soon
@@ -943,6 +925,9 @@
       loadingState.style.display = 'none';
       serviceStatus.style.display = 'none';
       captionsList.style.display = 'flex';
+      
+      // Apply sliding window before rendering
+      removeOldCaptions();
       
       // Only do full render if forced (initial load, clear, etc.)
       if (forceFullRender || captionsList.children.length === 0) {
@@ -993,6 +978,9 @@
         caption.isNew = true;
         captions.push(caption);
         
+        // Apply sliding window: remove old captions if we exceed limit
+        removeOldCaptions();
+        
         // Create and append new element
         const newElement = document.createElement('div');
         newElement.className = 'caption-item new';
@@ -1025,31 +1013,22 @@
       });
       
       // Auto-scroll if user is at bottom (only if not manually scrolling)
-      // Use debounced approach to handle rapid updates
       if (isAtBottom && !isUserScrolling) {
-        // Clear any pending auto-scroll to batch rapid updates
-        if (autoScrollTimeout) {
-          clearTimeout(autoScrollTimeout);
-        }
-        
-        // Schedule auto-scroll with minimal delay to batch rapid updates
-        autoScrollTimeout = setTimeout(() => {
-          // Double-check user hasn't scrolled during the delay
-          if (isUserScrolling) {
-            return; // User scrolled, don't auto-scroll
-          }
+        // Use a small delay to ensure DOM is updated
+        setTimeout(() => {
+          // Double-check we're still at bottom before scrolling
+          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const scrollHeight = document.documentElement.scrollHeight;
+          const clientHeight = document.documentElement.clientHeight;
+          const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
           
-          // Always scroll to bottom when at bottom (aggressive auto-scroll)
-          // Use requestAnimationFrame for smooth, immediate scrolling
-          requestAnimationFrame(() => {
-            // Final check before scrolling
-            if (!isUserScrolling) {
-              scrollToBottom(true);
-              // Update focus after scroll completes
-              setTimeout(updateFocusClasses, 100);
-            }
-          });
-        }, 5); // Very short delay (5ms) to batch rapid updates but still be responsive
+          if (distanceFromBottom < AUTO_SCROLL_THRESHOLD * 2) {
+            // Still near bottom, safe to auto-scroll
+            scrollToBottom(true);
+            // Update focus after scroll
+            setTimeout(updateFocusClasses, 300);
+          }
+        }, 50);
       }
     }
     

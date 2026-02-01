@@ -132,8 +132,7 @@ function logCaption(text, isFinal = true) {
 
   // Write to file (append) - file grows indefinitely, no auto-clear
   // File is only cleared manually via /transcript/clear endpoint
-  // Format: timestamp\ttext\ttag (tag is empty for new captions)
-  const logLine = `${timestamp}\t${text}\t\n`;
+  const logLine = `${timestamp}\t${text}\n`;
   try {
     if (captionsStream && captionsStream.writable && !captionsStream.destroyed) {
       captionsStream.write(logLine);
@@ -619,14 +618,8 @@ function broadcastServiceStatus(status, message) {
 /**
  * Serve the client.html file as default homepage
  */
-// Home page - serve audience page
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'audience.html'));
-});
-
-// Client/admin page
-app.get('/client', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client.html'));
+  res.sendFile(__dirname + '/client.html');
 });
 
 /**
@@ -934,33 +927,14 @@ app.get('/transcript', (req, res) => {
     let captions = [];
 
     // Parse file data
-    // Format: timestamp\ttext\ttag (tag is optional)
     if (data) {
       const lines = data.split('\n').filter(line => line.trim());
       captions = lines.map(line => {
         const parts = line.split('\t');
-        if (parts.length >= 3) {
-          // Has tag: timestamp, text (may contain tabs), tag
-          return {
-            timestamp: parts[0],
-            text: parts.slice(1, -1).join('\t'), // Text is everything except first (timestamp) and last (tag)
-            tag: parts[parts.length - 1] || '' // Last part is tag
-          };
-        } else if (parts.length === 2) {
-          // No tag: timestamp, text
-          return {
-            timestamp: parts[0],
-            text: parts[1],
-            tag: ''
-          };
-        } else {
-          // Fallback (shouldn't happen)
-          return {
-            timestamp: parts[0] || '',
-            text: parts.slice(1).join('\t'),
-            tag: ''
-          };
-        }
+        return {
+          timestamp: parts[0],
+          text: parts.slice(1).join('\t') // Handle text with tabs
+        };
       });
     }
 
@@ -977,14 +951,9 @@ app.get('/transcript', (req, res) => {
         ? displayCaptions.map(c => ({
             timestamp: new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString(),
             originalTimestamp: c.timestamp,
-            text: c.text,
-            tag: c.tag || ''
+            text: c.text
           }))
-        : displayCaptions.map(c => ({
-            timestamp: c.timestamp,
-            text: c.text,
-            tag: c.tag || ''
-          }));
+        : displayCaptions;
       return res.json({ 
         captions: exportCaptions, 
         total: captions.length,
@@ -996,18 +965,16 @@ app.get('/transcript', (req, res) => {
       const includeTimestamp = req.query.timestamp !== 'false';
       let csv;
       if (includeTimestamp) {
-        csv = 'Timestamp,Caption,Tag\n' + displayCaptions.map(c => {
+        csv = 'Timestamp,Caption\n' + displayCaptions.map(c => {
           const timestamp = timeOffset !== 0 
             ? new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString()
             : c.timestamp;
-          const tag = c.tag || '';
-          return `"${timestamp}","${c.text.replace(/"/g, '""')}","${tag.replace(/"/g, '""')}"`;
+          return `"${timestamp}","${c.text.replace(/"/g, '""')}"`;
         }).join('\n');
       } else {
-        csv = 'Caption,Tag\n' + displayCaptions.map(c => {
-          const tag = c.tag || '';
-          return `"${c.text.replace(/"/g, '""')}","${tag.replace(/"/g, '""')}"`;
-        }).join('\n');
+        csv = 'Caption\n' + displayCaptions.map(c =>
+          `"${c.text.replace(/"/g, '""')}"`
+        ).join('\n');
       }
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.csv"`);
@@ -1022,14 +989,10 @@ app.get('/transcript', (req, res) => {
           const date = timeOffset !== 0
             ? new Date(new Date(c.timestamp).getTime() + timeOffset)
             : new Date(c.timestamp);
-          const tag = c.tag ? `[${c.tag}] ` : '';
-          return `[${date.toLocaleString()}] ${tag}${c.text}`;
+          return `[${date.toLocaleString()}] ${c.text}`;
         }).join('\n\n');
       } else {
-        txt = displayCaptions.map(c => {
-          const tag = c.tag ? `[${c.tag}] ` : '';
-          return `${tag}${c.text}`;
-        }).join('\n\n');
+        txt = displayCaptions.map(c => c.text).join('\n\n');
       }
       res.setHeader('Content-Type', 'text/plain');
       res.setHeader('Content-Disposition', `attachment; filename="transcript-${new Date().toISOString().split('T')[0]}.txt"`);
@@ -1133,25 +1096,14 @@ app.get('/transcript', (req, res) => {
       ? displayCaptions.map((c, index) => {
           const time = new Date(c.timestamp).toLocaleTimeString();
           const date = new Date(c.timestamp).toLocaleDateString();
-          const tag = c.tag || '';
-          const tagDisplay = tag ? `<span class="caption-tag tag-${tag.replace(/\s+/g, '-')}">[${tag}]</span>` : '';
           return `
-            <div class="caption-item" data-timestamp="${c.timestamp}" data-index="${index}" data-tag="${escapeHtml(tag)}">
+            <div class="caption-item" data-timestamp="${c.timestamp}" data-index="${index}">
               <div class="caption-header">
                 <div class="caption-time">
-                  ${tagDisplay}
                   <span class="date">${date}</span>
                   <span class="time">${time}</span>
                 </div>
                 <div class="caption-actions">
-                  <div class="tag-buttons">
-                    <button class="tag-btn ${tag === 'prophecy' ? 'active' : ''}" onclick="setTag(this, 'prophecy')" title="Tag as prophecy">🔮</button>
-                    <button class="tag-btn ${tag === 'healing declaration' ? 'active' : ''}" onclick="setTag(this, 'healing declaration')" title="Tag as healing declaration">💚</button>
-                    <button class="tag-btn ${tag === 'scripture' ? 'active' : ''}" onclick="setTag(this, 'scripture')" title="Tag as scripture">📖</button>
-                    <button class="tag-btn ${tag === 'person call out' ? 'active' : ''}" onclick="setTag(this, 'person call out')" title="Tag as person call out">👤</button>
-                    <button class="tag-btn ${tag === 'ignore' ? 'active' : ''}" onclick="setTag(this, 'ignore')" title="Tag as ignore">🚫</button>
-                    ${tag ? `<button class="tag-btn tag-clear" onclick="setTag(this, '')" title="Remove tag">✕</button>` : ''}
-                  </div>
                   <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
                   <button class="replace-btn" onclick="replaceWithTongues(this)" title="Replace with (speaking in tongues)">🔄</button>
                   <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
@@ -1327,75 +1279,6 @@ app.get('/transcript', (req, res) => {
             .caption-actions {
               display: flex;
               gap: 6px;
-              align-items: center;
-            }
-            .tag-buttons {
-              display: flex;
-              gap: 4px;
-              margin-right: 4px;
-              opacity: 0;
-              transition: all 0.2s;
-            }
-            .caption-item:hover .tag-buttons {
-              opacity: 1;
-            }
-            .tag-btn {
-              background: transparent;
-              border: 1px solid transparent;
-              color: #858585;
-              cursor: pointer;
-              padding: 3px 6px;
-              border-radius: 3px;
-              font-size: 11px;
-              transition: all 0.2s;
-            }
-            .tag-btn:hover {
-              background: #3e3e42;
-              border-color: #858585;
-            }
-            .tag-btn.active {
-              background: #4ec9b0;
-              border-color: #4ec9b0;
-              color: #1e1e1e;
-            }
-            .tag-btn.tag-clear {
-              font-size: 10px;
-              padding: 2px 5px;
-            }
-            .tag-btn.tag-clear:hover {
-              background: #c5534b;
-              border-color: #c5534b;
-              color: white;
-            }
-            .caption-tag {
-              display: inline-block;
-              padding: 2px 6px;
-              border-radius: 3px;
-              font-size: 9px;
-              font-weight: 600;
-              text-transform: uppercase;
-              letter-spacing: 0.5px;
-              margin-right: 8px;
-            }
-            .caption-tag.tag-prophecy {
-              background: rgba(156, 39, 176, 0.3);
-              color: #ce93d8;
-            }
-            .caption-tag.tag-healing-declaration {
-              background: rgba(76, 175, 80, 0.3);
-              color: #81c784;
-            }
-            .caption-tag.tag-scripture {
-              background: rgba(33, 150, 243, 0.3);
-              color: #64b5f6;
-            }
-            .caption-tag.tag-ignore {
-              background: rgba(158, 158, 158, 0.3);
-              color: #bdbdbd;
-            }
-            .caption-tag.tag-person-call-out {
-              background: rgba(255, 152, 0, 0.3);
-              color: #ffb74d;
             }
             .edit-btn, .replace-btn, .delete-btn {
               background: transparent;
@@ -1783,37 +1666,6 @@ app.get('/transcript', (req, res) => {
               }
             }
 
-            // Tag management function
-            function setTag(button, tag) {
-              const captionItem = button.closest('.caption-item');
-              const timestamp = captionItem.getAttribute('data-timestamp');
-              
-              if (!timestamp) {
-                console.error('No timestamp found for caption');
-                return;
-              }
-              
-              // Update tag via API
-              fetch('/transcript/tag', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ timestamp, tag })
-              })
-              .then(res => res.json())
-              .then(data => {
-                if (data.success) {
-                  // Reload page to show updated tag
-                  location.reload();
-                } else {
-                  alert('Failed to update tag: ' + (data.error || 'Unknown error'));
-                }
-              })
-              .catch(err => {
-                console.error('Error updating tag:', err);
-                alert('Error updating tag: ' + err.message);
-              });
-            }
-
             // Inline editing functionality
             function editCaption(button) {
               const captionItem = button.closest('.caption-item');
@@ -2194,17 +2046,14 @@ app.post('/transcript/edit', (req, res) => {
     }
     
     // Parse and update the caption
-    // Format: timestamp\ttext\ttag
     const lines = data.split('\n').filter(line => line.trim());
     let updated = false;
     const updatedLines = lines.map(line => {
       const parts = line.split('\t');
       if (parts[0] === timestamp) {
         updated = true;
-        const oldText = parts.length >= 3 ? parts.slice(1, -1).join('\t') : parts.slice(1).join('\t');
-        const tag = parts.length >= 3 ? (parts[parts.length - 1] || '') : '';
-        logger.info(`Caption edited: "${oldText}" → "${newText}"`);
-        return tag ? `${timestamp}\t${newText}\t${tag}` : `${timestamp}\t${newText}\t`;
+        logger.info(`Caption edited: "${parts.slice(1).join('\t')}" → "${newText}"`);
+        return `${timestamp}\t${newText}`;
       }
       return line;
     });
@@ -2270,7 +2119,6 @@ app.post('/transcript/delete', (req, res) => {
     }
     
     // Parse and remove the caption
-    // Format: timestamp\ttext\ttag
     const lines = data.split('\n').filter(line => line.trim());
     let deleted = false;
     let deletedText = '';
@@ -2278,7 +2126,7 @@ app.post('/transcript/delete', (req, res) => {
       const parts = line.split('\t');
       if (parts[0] === timestamp) {
         deleted = true;
-        deletedText = parts.length >= 3 ? parts.slice(1, -1).join('\t') : parts.slice(1).join('\t');
+        deletedText = parts.slice(1).join('\t');
         logger.info(`Caption deleted: "${deletedText}" (${timestamp})`);
         return false; // Remove this line
       }
@@ -2323,68 +2171,6 @@ app.post('/transcript/delete', (req, res) => {
       }
       
       res.json({ success: true, message: 'Caption deleted successfully' });
-    });
-  });
-});
-
-/**
- * Update caption tag endpoint
- */
-app.post('/transcript/tag', (req, res) => {
-  const { timestamp, tag } = req.body;
-  
-  if (!timestamp) {
-    return res.status(400).json({ success: false, error: 'Missing timestamp' });
-  }
-  
-  // Validate tag
-  const validTags = ['prophecy', 'healing declaration', 'scripture', 'ignore', 'person call out', ''];
-  if (tag && !validTags.includes(tag)) {
-    return res.status(400).json({ success: false, error: 'Invalid tag. Valid tags: prophecy, healing declaration, scripture, ignore, person call out' });
-  }
-  
-  // Read the captions file
-  fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
-    if (err) {
-      logger.error('Failed to read captions for tag update:', err.message);
-      return res.status(500).json({ success: false, error: 'Failed to read captions file' });
-    }
-    
-    // Parse and update the caption tag
-    // Format: timestamp\ttext\ttag
-    const lines = data.split('\n').filter(line => line.trim());
-    let updated = false;
-    const updatedLines = lines.map(line => {
-      const parts = line.split('\t');
-      if (parts[0] === timestamp) {
-        updated = true;
-        const text = parts.length >= 3 ? parts.slice(1, -1).join('\t') : parts.slice(1).join('\t');
-        const newTag = tag || '';
-        logger.info(`Caption tagged: "${text}" → tag: "${newTag}"`);
-        return newTag ? `${timestamp}\t${text}\t${newTag}` : `${timestamp}\t${text}\t`;
-      }
-      return line;
-    });
-    
-    if (!updated) {
-      return res.status(404).json({ success: false, error: 'Caption not found' });
-    }
-    
-    // Write back to file
-    const newContent = updatedLines.join('\n') + '\n';
-    fs.writeFile(CAPTIONS_LOG_FILE, newContent, 'utf8', (err) => {
-      if (err) {
-        logger.error('Failed to save tag update:', err.message);
-        return res.status(500).json({ success: false, error: 'Failed to save changes' });
-      }
-      
-      // Update in-memory history if present
-      const memoryEntry = captionHistory.find(c => c.timestamp === timestamp);
-      if (memoryEntry) {
-        memoryEntry.tag = tag || '';
-      }
-      
-      res.json({ success: true, message: 'Tag updated successfully' });
     });
   });
 });
@@ -2481,32 +2267,13 @@ app.get('/audience/stream', (req, res) => {
         const lines = data.split('\n').filter(line => line.trim());
         
         // Get all captions from file (no limit - fully scrollable)
-        // Parse captions - format: timestamp\ttext\ttag
-        // Tags are NOT sent to audience, only text
         const recentCaptions = lines.map(line => {
           const parts = line.split('\t');
-          if (parts.length >= 3) {
-            // Has tag: timestamp, text (may contain tabs), tag
-            return {
-              type: 'caption',
-              timestamp: parts[0],
-              text: parts.slice(1, -1).join('\t') // Text is everything except first (timestamp) and last (tag)
-            };
-          } else if (parts.length === 2) {
-            // No tag: timestamp, text
-            return {
-              type: 'caption',
-              timestamp: parts[0],
-              text: parts[1]
-            };
-          } else {
-            // Fallback
-            return {
-              type: 'caption',
-              timestamp: parts[0] || '',
-              text: parts.slice(1).join('\t')
-            };
-          }
+          return {
+            type: 'caption',
+            timestamp: parts[0],
+            text: parts.slice(1).join('\t')
+          };
         });
         
         // Send recent captions to new viewer
@@ -3514,8 +3281,7 @@ server.listen(PORT, () => {
   console.log(`🌐 Open http://localhost:${PORT} in Resolume Browser Source`);
   console.log(`📊 Server logs: http://localhost:${PORT}/logs`);
   console.log(`📝 Caption transcript: http://localhost:${PORT}/transcript`);
-  console.log(`👥 Audience viewer: http://localhost:${PORT} (home page)`);
-  console.log(`🔧 Admin/Client page: http://localhost:${PORT}/client`);
+  console.log(`👥 Audience viewer: http://localhost:${PORT}/audience`);
   console.log(`⏱️  Optimized for long-running sessions (3+ hours)`);
 });
 
