@@ -3009,6 +3009,58 @@ function shutdownSonioxConnection() {
 }
 
 /**
+ * Build Soniox context for improved transcription/translation accuracy
+ * Based on: https://soniox.com/docs/stt/concepts/context
+ *
+ * NOTE: Only uses fields supported by Soniox: general, text, terms, translation_terms.
+ */
+function buildSonioxContext() {
+  return {
+    general: [
+      { key: "domain", value: "Church / Christianity" },
+      { key: "topic", value: "Pastoral Sermon" },
+      { key: "setting", value: "Church worship service" },
+      { key: "speaker_role", value: "Pastor / Preacher" }
+    ],
+
+    text: `
+This content is a pastor delivering a Christian sermon during a church service.
+The speech includes Bible-based teaching, scripture references, exhortation,
+prayerful language, and pastoral instruction addressed to a congregation.
+
+The translation should sound natural to a church audience and reflect how
+pastors commonly speak when preaching from the Bible.
+`.trim(),
+
+    terms: [
+      // Core biblical & church vocabulary
+      "Amen", "Hallelujah", "Praise the Lord", "Worship", "Prayer",
+      "Scripture", "The Word", "Word of God", "The Gospel",
+      "Salvation", "Redemption", "Grace", "Mercy", "Faith", "Repentance",
+      "Anointing", "Covenant", "Blessing", "Obedience",
+
+      // Names & titles
+      "Jesus", "Jesus Christ", "Christ", "Lord", "God", "Father",
+      "Holy Spirit", "Savior", "Messiah",
+
+      // Sermon-specific language
+      "Brothers and sisters", "Church", "Congregation",
+      "Testimony", "Calling", "Ministry", "Preaching"
+    ],
+
+    translation_terms: [
+      // Preserve biblical terms exactly
+      { source: "Amen", target: "Amen" },
+      { source: "Hallelujah", target: "Hallelujah" },
+      { source: "Jesus Christ", target: "Jesus Christ" },
+      { source: "Holy Spirit", target: "Holy Spirit" },
+      { source: "Word of God", target: "Word of God" },
+      { source: "The Gospel", target: "The Gospel" }
+    ]
+  };
+}
+
+/**
  * Connect to Soniox WebSocket with configurable settings
  */
 function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
@@ -3102,6 +3154,10 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       } else {
         console.log('📝 Translation disabled (same language or target is "none")');
       }
+      
+      // Add context for improved accuracy (church/sermon domain)
+      sonioxConfig.context = buildSonioxContext();
+      console.log('📚 Added context for church/sermon domain to improve transcription accuracy');
 
       try {
         sonioxWs.send(JSON.stringify(sonioxConfig));
@@ -3220,6 +3276,19 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
         const originalText = originalTokens.map(t => t.text || '').join('').trim();
         const translatedText = translatedTokens.map(t => t.text || '').join('').trim();
         
+        // Calculate average confidence scores for logging
+        const calculateAverageConfidence = (tokens) => {
+          const confidences = tokens
+            .map(t => t.confidence || t.conf || t.confidence_score)
+            .filter(c => c !== undefined && c !== null);
+          if (confidences.length === 0) return null;
+          const sum = confidences.reduce((a, b) => a + b, 0);
+          return (sum / confidences.length * 100).toFixed(1); // Convert to percentage
+        };
+        
+        const originalConfidence = calculateAverageConfidence(originalTokens);
+        const translatedConfidence = calculateAverageConfidence(translatedTokens);
+        
         // Check if we have final results
         const finalOriginalTokens = originalTokens.filter(t => t.is_final === true);
         const finalTranslatedTokens = translatedTokens.filter(t => t.is_final === true);
@@ -3239,6 +3308,10 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
             
             // Send to YouTube and audience (only final results)
             if (isFinal) {
+              // Log with confidence score
+              if (translatedConfidence) {
+                logger.info(`📊 Translation confidence: ${translatedConfidence}% - "${translatedText.substring(0, 60)}${translatedText.length > 60 ? '...' : ''}"`);
+              }
               logCaption(translatedText, true); // Log final caption to history
               broadcastToAudience(translatedText, true); // Send to audience viewers
               youtubePublisher.publish(translatedText).catch(err => {
@@ -3264,6 +3337,13 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
             
             // Send to YouTube and audience (only final results)
             if (isFinal) {
+              // Log with confidence scores
+              if (originalConfidence || translatedConfidence) {
+                const confInfo = [];
+                if (originalConfidence) confInfo.push(`Original: ${originalConfidence}%`);
+                if (translatedConfidence) confInfo.push(`Translation: ${translatedConfidence}%`);
+                logger.info(`📊 Confidence scores (${confInfo.join(', ')}) - "${translatedText.substring(0, 60)}${translatedText.length > 60 ? '...' : ''}"`);
+              }
               logCaption(translatedText, true); // Log final caption to history
               broadcastToAudience(translatedText, true); // Send to audience viewers
               youtubePublisher.publish(translatedText).catch(err => {
@@ -3287,6 +3367,10 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
               
               // Log and send to YouTube and audience (only final results)
               if (isFinal) {
+                // Log with confidence score
+                if (originalConfidence) {
+                  logger.info(`📊 Transcription confidence: ${originalConfidence}% - "${originalText.substring(0, 60)}${originalText.length > 60 ? '...' : ''}"`);
+                }
                 logCaption(originalText, true);
                 broadcastToAudience(originalText, true); // Send to audience viewers
                 youtubePublisher.publish(originalText).catch(err => {
