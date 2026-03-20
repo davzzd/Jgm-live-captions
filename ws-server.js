@@ -1226,59 +1226,7 @@ app.get('/transcript', (req, res) => {
               margin-top: 10px;
               font-size: 11px;
             }
-            .time-adjustment {
-              margin-top: 10px;
-              padding: 10px;
-              background: #1e1e1e;
-              border: 1px solid #3e3e42;
-              border-radius: 3px;
-              display: flex;
-              align-items: center;
-              gap: 10px;
-              flex-wrap: wrap;
-            }
-            .time-adjustment label {
-              color: #9cdcfe;
-              font-size: 12px;
-              font-weight: 600;
-            }
-            .time-adjustment input {
-              background: #3c3c3c;
-              color: #d4d4d4;
-              border: 1px solid #555;
-              padding: 5px 10px;
-              border-radius: 3px;
-              font-family: inherit;
-              font-size: 12px;
-            }
-            .time-adjustment button {
-              background: #0e639c;
-              color: white;
-              border: none;
-              padding: 5px 12px;
-              border-radius: 3px;
-              cursor: pointer;
-              font-size: 11px;
-              font-weight: 600;
-            }
-            .time-adjustment button:hover {
-              background: #1177bb;
-            }
-            .time-adjustment button.reset {
-              background: #c5534b;
-            }
-            .time-adjustment button.reset:hover {
-              background: #d16b64;
-            }
-            .time-offset-indicator {
-              color: #dcdcaa;
-              font-size: 11px;
-              font-weight: 600;
-              display: none;
-            }
-            .time-offset-indicator.active {
-              display: inline;
-            }
+
             .content {
               background: #252526;
               border: 1px solid #3e3e42;
@@ -1526,166 +1474,16 @@ app.get('/transcript', (req, res) => {
               Showing ${displayCaptions.length.toLocaleString()} of ${captions.length.toLocaleString()} captions
               ${limit > 0 ? `(limited to last ${limit})` : '(showing all)'}
               ${captions.length > 10000 ? '<br><span style="color: #dcdcaa;">⚠️ Large file detected. Consider using ?limit=N to view recent captions only.</span>' : ''}
-              <span class="time-offset-indicator" id="timeOffsetIndicator"></span>
-            </div>
-            <div class="time-adjustment">
-              <label for="startTime">⏰ Adjust Start Time:</label>
-              <input type="time" id="startTime" step="1" title="Set start time in 24-hour format (e.g., 00:00:00 for video start, 01:23:45 for 1h 23m 45s into video)" placeholder="HH:MM:SS">
-              <button onclick="applyTimeOffset()">Apply</button>
-              <button class="reset" onclick="resetTimeOffset()">Reset to Actual</button>
-              <span style="font-size: 11px; color: #858585; margin-left: 10px;">
-                💡 Use 24-hour format (00:00:00 to 23:59:59) - perfect for video timecodes
-              </span>
             </div>
           </div>
           <div class="content" id="captionsContainer">
             ${captionHTML}
           </div>
           <script>
-            // Time adjustment state
-            let timeOffsetMs = parseInt(localStorage.getItem('transcriptTimeOffset')) || 0;
-            let startTimeValue = localStorage.getItem('transcriptStartTime') || ''; // Store the start time string (e.g., "00:05:30")
-            let firstCaptionTimestamp = null;
-
             // Smart autoscroll state
             let isUserScrolling = false;
             let autoScrollEnabled = true;
             let scrollTimeout;
-
-            // Initialize time offset on load
-            function initTimeOffset() {
-              // Get first caption timestamp
-              const firstCaption = document.querySelector('.caption-item');
-              if (firstCaption) {
-                firstCaptionTimestamp = firstCaption.getAttribute('data-timestamp');
-                
-                // Load start time from localStorage if available
-                const savedStartTime = localStorage.getItem('transcriptStartTime');
-                if (savedStartTime) {
-                  startTimeValue = savedStartTime;
-                  document.getElementById('startTime').value = savedStartTime;
-                }
-                
-                // If offset exists, apply it and update indicator
-                if (timeOffsetMs !== 0) {
-                  updateTimeOffsetIndicator();
-                  applyStoredOffset();
-                }
-              }
-            }
-
-            // Apply time offset
-            function applyTimeOffset() {
-              const startTimeInput = document.getElementById('startTime').value;
-              if (!startTimeInput) {
-                alert('Please select a start time');
-                return;
-              }
-
-              if (!firstCaptionTimestamp) {
-                alert('No captions available');
-                return;
-              }
-
-              // Parse the input time (HH:MM:SS)
-              const [hours, minutes, seconds] = startTimeInput.split(':').map(Number);
-              
-              // Create target time using today's date
-              const targetDate = new Date();
-              targetDate.setHours(hours, minutes, seconds || 0, 0);
-              const targetMs = targetDate.getTime();
-
-              // Get first caption's actual timestamp
-              const firstCaptionDate = new Date(firstCaptionTimestamp);
-              const firstCaptionMs = firstCaptionDate.getTime();
-
-              // Calculate offset
-              timeOffsetMs = targetMs - firstCaptionMs;
-
-              // Save to localStorage
-              localStorage.setItem('transcriptTimeOffset', timeOffsetMs);
-              localStorage.setItem('transcriptStartTime', startTimeInput); // Store the start time string
-
-              // Store start time value
-              startTimeValue = startTimeInput;
-
-              // Apply to all captions
-              applyOffsetToAllCaptions();
-              updateTimeOffsetIndicator();
-            }
-
-            // Reset time offset
-            function resetTimeOffset() {
-              timeOffsetMs = 0;
-              startTimeValue = '';
-              localStorage.removeItem('transcriptTimeOffset');
-              localStorage.removeItem('transcriptStartTime');
-              document.getElementById('startTime').value = '';
-              
-              // Restore all original times
-              const captions = document.querySelectorAll('.caption-item');
-              captions.forEach(caption => {
-                const originalTimestamp = caption.getAttribute('data-timestamp');
-                if (originalTimestamp) {
-                  const date = new Date(originalTimestamp);
-                  const timeSpan = caption.querySelector('.caption-time .time');
-                  const dateSpan = caption.querySelector('.caption-time .date');
-                  if (timeSpan) timeSpan.textContent = date.toLocaleTimeString();
-                  if (dateSpan) dateSpan.textContent = date.toLocaleDateString();
-                }
-              });
-
-              // Hide indicator
-              const indicator = document.getElementById('timeOffsetIndicator');
-              indicator.classList.remove('active');
-              indicator.textContent = '';
-            }
-
-            // Apply offset to all captions
-            function applyOffsetToAllCaptions() {
-              const captions = document.querySelectorAll('.caption-item');
-              captions.forEach(caption => {
-                const originalTimestamp = caption.getAttribute('data-timestamp');
-                if (originalTimestamp) {
-                  const originalDate = new Date(originalTimestamp);
-                  const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
-                  
-                  const timeSpan = caption.querySelector('.caption-time .time');
-                  const dateSpan = caption.querySelector('.caption-time .date');
-                  if (timeSpan) timeSpan.textContent = adjustedDate.toLocaleTimeString();
-                  if (dateSpan) dateSpan.textContent = adjustedDate.toLocaleDateString();
-                }
-              });
-            }
-
-            // Apply stored offset on page load
-            function applyStoredOffset() {
-              if (timeOffsetMs !== 0) {
-                applyOffsetToAllCaptions();
-              }
-            }
-
-            // Update time offset indicator
-            function updateTimeOffsetIndicator() {
-              const indicator = document.getElementById('timeOffsetIndicator');
-              if (timeOffsetMs !== 0) {
-                const offsetHours = Math.floor(Math.abs(timeOffsetMs) / 3600000);
-                const offsetMinutes = Math.floor((Math.abs(timeOffsetMs) % 3600000) / 60000);
-                const offsetSeconds = Math.floor((Math.abs(timeOffsetMs) % 60000) / 1000);
-                const sign = timeOffsetMs >= 0 ? '+' : '-';
-                
-                let offsetStr = '';
-                if (offsetHours > 0) offsetStr += \`\${offsetHours}h \`;
-                if (offsetMinutes > 0) offsetStr += \`\${offsetMinutes}m \`;
-                if (offsetSeconds > 0 || offsetStr === '') offsetStr += \`\${offsetSeconds}s\`;
-                
-                indicator.textContent = \` (Time adjusted: \${sign}\${offsetStr})\`;
-                indicator.classList.add('active');
-              } else {
-                indicator.classList.remove('active');
-                indicator.textContent = '';
-              }
-            }
 
             // Detect if user is at bottom of page
             function isAtBottom() {
@@ -1730,32 +1528,21 @@ app.get('/transcript', (req, res) => {
               switch(value) {
                 case 'txt-with':
                   url = '/transcript?format=txt&timestamp=true';
-                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'txt-without':
                   url = '/transcript?format=txt&timestamp=false';
                   break;
                 case 'csv-with':
                   url = '/transcript?format=csv&timestamp=true';
-                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'csv-without':
                   url = '/transcript?format=csv&timestamp=false';
                   break;
                 case 'json':
                   url = '/transcript?format=json';
-                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'srt':
                   url = '/transcript?format=srt';
-                  // Include time offset if set
-                  if (timeOffsetMs !== 0) {
-                    url += '&offset=' + timeOffsetMs;
-                  }
-                  // Include start time if set (for SRT base time)
-                  if (startTimeValue) {
-                    url += '&startTime=' + encodeURIComponent(startTimeValue);
-                  }
                   break;
               }
 
@@ -2076,22 +1863,15 @@ app.get('/transcript', (req, res) => {
               const caption = JSON.parse(event.data);
               const container = document.getElementById('captionsContainer');
 
-              // Set first caption timestamp if not set
-              if (!firstCaptionTimestamp) {
-                firstCaptionTimestamp = caption.timestamp;
-              }
-
               // Remove "no captions" message if present
               const noCaptions = container.querySelector('.no-captions');
               if (noCaptions) {
                 noCaptions.remove();
               }
 
-              // Apply time offset if set
               const originalDate = new Date(caption.timestamp);
-              const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
-              const time = adjustedDate.toLocaleTimeString();
-              const date = adjustedDate.toLocaleDateString();
+              const time = originalDate.toLocaleTimeString();
+              const date = originalDate.toLocaleDateString();
               
               // Get tag from caption (default to empty string)
               const tag = caption.tag || '';
@@ -2145,14 +1925,7 @@ app.get('/transcript', (req, res) => {
               // Reconnection is automatic
             };
 
-            // Initialize time offset on page load
-            window.addEventListener('DOMContentLoaded', initTimeOffset);
-            // Also call immediately in case DOMContentLoaded already fired
-            if (document.readyState === 'loading') {
-              document.addEventListener('DOMContentLoaded', initTimeOffset);
-            } else {
-              initTimeOffset();
-            }
+
           </script>
         </body>
       </html>
