@@ -1150,6 +1150,8 @@ app.get('/transcript', (req, res) => {
                     <button class="tag-btn ${tag === 'healing declaration' ? 'active' : ''}" onclick="setTag(this, 'healing declaration')" title="Tag as healing declaration">💚</button>
                     <button class="tag-btn ${tag === 'scripture' ? 'active' : ''}" onclick="setTag(this, 'scripture')" title="Tag as scripture">📖</button>
                     <button class="tag-btn ${tag === 'person call out' ? 'active' : ''}" onclick="setTag(this, 'person call out')" title="Tag as person call out">👤</button>
+                    <button class="tag-btn ${tag === 'emphasis' ? 'active' : ''}" onclick="setTag(this, 'emphasis')" title="Tag as emphasis">⭐</button>
+                    <button class="tag-btn ${tag === 'POINT' ? 'active' : ''}" onclick="setTag(this, 'POINT')" title="Tag as POINT">📌</button>
                     <button class="tag-btn ${tag === 'ignore' ? 'active' : ''}" onclick="setTag(this, 'ignore')" title="Tag as ignore">🚫</button>
                     ${tag ? `<button class="tag-btn tag-clear" onclick="setTag(this, '')" title="Remove tag">✕</button>` : ''}
                   </div>
@@ -1346,6 +1348,14 @@ app.get('/transcript', (req, res) => {
               background: rgba(255, 152, 0, 0.3);
               color: #ffb74d;
             }
+            .caption-tag.tag-emphasis {
+              background: rgba(255, 235, 59, 0.3);
+              color: #fff59d;
+            }
+            .caption-tag.tag-POINT {
+              background: rgba(244, 67, 54, 0.3);
+              color: #ef5350;
+            }
             .edit-btn, .replace-btn, .delete-btn {
               background: transparent;
               border: 1px solid transparent;
@@ -1480,6 +1490,19 @@ app.get('/transcript', (req, res) => {
             ${captionHTML}
           </div>
           <script>
+            // Fix server-rendered timestamps to match client locale/timezone
+            // This ensures initial loading captions match the timezone of live SSE captions
+            document.querySelectorAll('.caption-item').forEach(item => {
+              const timestamp = item.getAttribute('data-timestamp');
+              if (timestamp) {
+                const dateObj = new Date(timestamp);
+                const dateSpan = item.querySelector('.caption-time .date');
+                const timeSpan = item.querySelector('.caption-time .time');
+                if (dateSpan) dateSpan.textContent = dateObj.toLocaleDateString();
+                if (timeSpan) timeSpan.textContent = dateObj.toLocaleTimeString();
+              }
+            });
+
             // Smart autoscroll state
             let isUserScrolling = false;
             let autoScrollEnabled = true;
@@ -1894,6 +1917,8 @@ app.get('/transcript', (req, res) => {
                       <button class="tag-btn \${tag === 'healing declaration' ? 'active' : ''}" onclick="setTag(this, 'healing declaration')" title="Tag as healing declaration">💚</button>
                       <button class="tag-btn \${tag === 'scripture' ? 'active' : ''}" onclick="setTag(this, 'scripture')" title="Tag as scripture">📖</button>
                       <button class="tag-btn \${tag === 'person call out' ? 'active' : ''}" onclick="setTag(this, 'person call out')" title="Tag as person call out">👤</button>
+                      <button class="tag-btn \${tag === 'emphasis' ? 'active' : ''}" onclick="setTag(this, 'emphasis')" title="Tag as emphasis">⭐</button>
+                      <button class="tag-btn \${tag === 'POINT' ? 'active' : ''}" onclick="setTag(this, 'POINT')" title="Tag as POINT">📌</button>
                       <button class="tag-btn \${tag === 'ignore' ? 'active' : ''}" onclick="setTag(this, 'ignore')" title="Tag as ignore">🚫</button>
                       \${tag ? \`<button class="tag-btn tag-clear" onclick="setTag(this, '')" title="Remove tag">✕</button>\` : ''}
                     </div>
@@ -2126,9 +2151,9 @@ app.post('/transcript/tag', (req, res) => {
   }
 
   // Validate tag
-  const validTags = ['prophecy', 'healing declaration', 'scripture', 'ignore', 'person call out', ''];
+  const validTags = ['prophecy', 'healing declaration', 'scripture', 'ignore', 'person call out', 'emphasis', 'POINT', ''];
   if (tag && !validTags.includes(tag)) {
-    return res.status(400).json({ success: false, error: 'Invalid tag. Valid tags: prophecy, healing declaration, scripture, ignore, person call out' });
+    return res.status(400).json({ success: false, error: 'Invalid tag. Valid tags: prophecy, healing declaration, scripture, ignore, person call out, emphasis, POINT' });
   }
 
   // Read the captions file
