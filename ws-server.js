@@ -970,6 +970,7 @@ app.get('/transcript', (req, res) => {
 
     // Get time offset from query parameter (if provided from frontend)
     const timeOffset = parseInt(req.query.offset) || 0;
+    const tz = req.query.tz || undefined;
 
     // Export formats
     if (format === 'json') {
@@ -998,11 +999,13 @@ app.get('/transcript', (req, res) => {
       let csv;
       if (includeTimestamp) {
         csv = 'Timestamp,Caption,Tag\n' + displayCaptions.map(c => {
-          const timestamp = timeOffset !== 0
-            ? new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString()
-            : c.timestamp;
+          const dateObj = timeOffset !== 0
+            ? new Date(new Date(c.timestamp).getTime() + timeOffset)
+            : new Date(c.timestamp);
+          const dateOpts = tz ? { timeZone: tz } : undefined;
+          const displayTimestamp = tz ? `${dateObj.toLocaleDateString(undefined, dateOpts)} ${dateObj.toLocaleTimeString(undefined, dateOpts)}` : dateObj.toISOString();
           const tag = c.tag || '';
-          return `"${timestamp}","${c.text.replace(/"/g, '""')}","${tag.replace(/"/g, '""')}"`;
+          return `"${displayTimestamp}","${c.text.replace(/"/g, '""')}","${tag.replace(/"/g, '""')}"`;
         }).join('\n');
       } else {
         csv = 'Caption,Tag\n' + displayCaptions.map(c => {
@@ -1023,8 +1026,10 @@ app.get('/transcript', (req, res) => {
           const date = timeOffset !== 0
             ? new Date(new Date(c.timestamp).getTime() + timeOffset)
             : new Date(c.timestamp);
+          const dateOpts = tz ? { timeZone: tz } : undefined;
+          const dateStr = tz ? `${date.toLocaleDateString(undefined, dateOpts)} ${date.toLocaleTimeString(undefined, dateOpts)}` : date.toLocaleString();
           const tag = c.tag ? `[${c.tag}] ` : '';
-          return `[${date.toLocaleString()}] ${tag}${c.text}`;
+          return `[${dateStr}] ${tag}${c.text}`;
         }).join('\n\n');
       } else {
         txt = displayCaptions.map(c => {
@@ -1570,6 +1575,8 @@ app.get('/transcript', (req, res) => {
               }
 
               if (url) {
+                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (tz) url += '&tz=' + encodeURIComponent(tz);
                 window.location.href = url;
               }
 
