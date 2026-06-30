@@ -2933,7 +2933,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       // Build Soniox configuration
       const sonioxConfig = {
         api_key: config.apiKey,
-        model: 'stt-rt-v4',
+        model: process.env.SONIOX_MODEL || 'stt-rt-v5',
         endpoint_detection: true,
         audio_format: 's16le',
         sample_rate: 16000,
