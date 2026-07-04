@@ -162,6 +162,10 @@ logger.info('===== Server starting =====');
 const app = express();
 const server = http.createServer(app);
 
+// Trust the reverse proxy (nginx) that terminates SSL in front of this app,
+// so req.protocol reflects the original https scheme via X-Forwarded-Proto.
+app.set('trust proxy', true);
+
 // Middleware
 app.use(express.json()); // Parse JSON request bodies
 
