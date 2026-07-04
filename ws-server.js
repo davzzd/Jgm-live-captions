@@ -32,6 +32,7 @@ const captionHistory = []; // In-memory store for current session (for quick acc
 // SSE clients for real-time streaming
 const transcriptSSEClients = new Set();
 const logsSSEClients = new Set();
+const audienceSSEClients = new Set(); // Audience viewers (read-only)
 
 // Save original console methods FIRST (before any function uses them)
 const originalConsoleLog = console.log;
@@ -75,7 +76,7 @@ function log(level, message, ...args) {
 
   // Also log to console using ORIGINAL methods (avoid infinite recursion)
   const consoleMsg = `${message}`;
-  switch(level) {
+  switch (level) {
     case 'ERROR':
       originalConsoleError(consoleMsg, ...args);
       break;
@@ -96,15 +97,15 @@ const logger = {
 };
 
 // Override console methods to capture all logs
-console.log = function(...args) {
+console.log = function (...args) {
   log('INFO', args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
 };
 
-console.error = function(...args) {
+console.error = function (...args) {
   log('ERROR', args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
 };
 
-console.warn = function(...args) {
+console.warn = function (...args) {
   log('WARN', args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
 };
 
@@ -113,13 +114,14 @@ console.warn = function(...args) {
  * @param {string} text - The caption text
  * @param {boolean} isFinal - Whether this is a final caption
  */
-function logCaption(text, isFinal = true) {
+function logCaption(text, isFinal = true, tag = '') {
   if (!text || !isFinal) return; // Only log final captions
 
   const timestamp = new Date().toISOString();
   const entry = {
     timestamp,
     text,
+    tag: tag || '', // Include tag in entry for SSE
     session: new Date().toISOString().split('T')[0] // Date as session ID
   };
 
@@ -131,7 +133,8 @@ function logCaption(text, isFinal = true) {
 
   // Write to file (append) - file grows indefinitely, no auto-clear
   // File is only cleared manually via /transcript/clear endpoint
-  const logLine = `${timestamp}\t${text}\n`;
+  // Format: timestamp\ttext\ttag (tag is empty for new captions)
+  const logLine = `${timestamp}\t${text}\t${tag || ''}\n`;
   try {
     if (captionsStream && captionsStream.writable && !captionsStream.destroyed) {
       captionsStream.write(logLine);
@@ -163,13 +166,13 @@ const server = http.createServer(app);
 app.use(express.json()); // Parse JSON request bodies
 
 // WebSocket server for browser clients (mic input)
-const wssClients = new WebSocket.Server({ 
+const wssClients = new WebSocket.Server({
   noServer: true,
   path: '/client' // Browser connects to ws://localhost:8080/client
 });
 
 // WebSocket server for caption displays (captions.html)
-const wssCaptions = new WebSocket.Server({ 
+const wssCaptions = new WebSocket.Server({
   noServer: true,
   path: '/captions' // captions.html connects to ws://localhost:8080/captions
 });
@@ -183,6 +186,18 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 // Support both YOUTUBE_CAPTION_URL (singular) and YOUTUBE_CAPTIONS_URL (plural) for compatibility
 const YOUTUBE_CAPTIONS_URL = process.env.YOUTUBE_CAPTION_URL || process.env.YOUTUBE_CAPTIONS_URL;
 const YOUTUBE_CAPTIONS_LANGUAGE = process.env.LANGUAGE || 'en';
+
+// ===== AUDIENCE SYSTEM =====
+// Token system removed - using simple /audience endpoint
+let audienceCaptionBuffer = []; // Last 6 captions for audience display (kept for backwards compat)
+// No limit - show all captions to audience (scrollable)
+
+// Service status tracking (for audience status display)
+let serviceStatus = {
+  status: 'offline',  // 'offline', 'connecting', 'ready', 'paused', 'ended'
+  message: 'Service has not started yet',
+  timestamp: new Date().toISOString()
+};
 
 // Soniox connection state management
 let sonioxWs = null;
@@ -214,7 +229,7 @@ let heartbeatInterval = null;
  */
 function formatYouTubeCaption(text) {
   if (!text) return '';
-  
+
   const words = text.trim().split(/\s+/).filter(w => w.length > 0);
   const lines = [];
   let current = '';
@@ -267,35 +282,35 @@ class YouTubeCaptionPublisher {
     console.log(`📤 Sending caption to YouTube (seq: ${this.sequenceNumber + 1}):`, formattedCaption.replace(/\n/g, ' | ').substring(0, 80) + (formattedCaption.length > 80 ? '...' : ''));
 
     const startTime = Date.now();
-    
+
     // Variables for error handling and retry
     let cleanedLines = [];
     let isMultiLine = false;
     let finalCaption = '';
     let timestamp = '';
     let urlWithParams = '';
-    
+
     try {
       // Increment sequence number for YouTube (required for live captions)
       this.sequenceNumber++;
-      
+
       // Build URL with sequence number and language as query parameters
       urlWithParams = `${this.postUrl}${this.postUrl.includes('?') ? '&' : '?'}seq=${this.sequenceNumber}&lang=${this.language}`;
-      
+
       // Generate timestamp in UTC format: YYYY-MM-DDTHH:MM:SS.mmm
       const now = new Date();
       timestamp = now.toISOString().replace('Z', '').substring(0, 23); // Remove 'Z' and keep milliseconds
-      
+
       // Clean caption text - YouTube expects clean text
       // Process line by line to ensure proper formatting
       const lines = formattedCaption.split('\n').filter(line => line.trim().length > 0);
-      
+
       // Validate: YouTube requires max 2 lines
       if (lines.length > 2) {
         console.warn(`⚠️ Caption has ${lines.length} lines, truncating to 2`);
         lines.splice(2);
       }
-      
+
       // Clean and validate each line
       cleanedLines = [];
       for (let i = 0; i < lines.length; i++) {
@@ -303,41 +318,41 @@ class YouTubeCaptionPublisher {
           .replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]/g, '') // Remove control chars (keep structure)
           .replace(/[ \t]+/g, ' ') // Collapse spaces/tabs
           .trim();
-        
+
         // Validate line length (YouTube limit: 32 chars per line)
         if (line.length > 32) {
           console.warn(`⚠️ Line ${i + 1} exceeds 32 chars (${line.length}), truncating: "${line.substring(0, 35)}..."`);
           line = line.substring(0, 32);
         }
-        
+
         if (line.length > 0) {
           cleanedLines.push(line);
         }
       }
-      
+
       // Validate we have at least one line
       if (cleanedLines.length === 0) {
         console.warn('⚠️ Skipping empty caption after cleaning');
         return;
       }
-      
+
       // Final caption - YouTube seems to reject multi-line format, so always use single-line
       // Join lines with space instead of newline to ensure compatibility
       finalCaption = cleanedLines.join(' ');
       isMultiLine = false; // Always treat as single-line for YouTube compatibility
-      
+
       // If the single-line would be too long, truncate to 64 chars (YouTube's practical limit)
       if (finalCaption.length > 64) {
         console.warn(`⚠️ Caption exceeds 64 chars (${finalCaption.length}), truncating`);
         finalCaption = finalCaption.substring(0, 61) + '...';
       }
-      
+
       // YouTube expects: timestamp\ncaption\n (with trailing newline)
       // For multi-line: timestamp\nline1\nline2\n
       // For single-line: timestamp\nline1\n
       const payload = `${timestamp}\n${finalCaption}\n`;
       const payloadBytes = Buffer.from(payload, 'utf-8');
-      
+
       // Debug: Log exact payload bytes for troubleshooting (always log for multi-line, and on errors)
       if (isMultiLine) {
         console.log(`   🔍 Multi-line caption (${cleanedLines.length} lines):`);
@@ -349,13 +364,13 @@ class YouTubeCaptionPublisher {
         console.log(`   🔍 Payload hex (first 120 bytes): ${payloadBytes.slice(0, 120).toString('hex')}`);
         console.log(`   🔍 Payload repr: ${JSON.stringify(payload.substring(0, 200))}`);
       }
-      
+
       // Validate payload doesn't contain invalid characters
       if (payloadBytes.includes(0x00)) {
         console.error('❌ Payload contains null bytes, skipping');
         return;
       }
-      
+
       // Validate timestamp format is correct (YYYY-MM-DDTHH:MM:SS.mmm)
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/.test(timestamp)) {
         console.error(`❌ Invalid timestamp format: ${timestamp}`);
@@ -367,7 +382,7 @@ class YouTubeCaptionPublisher {
       console.log(`   Sequence: ${this.sequenceNumber}`);
       console.log(`   Payload length: ${payloadBytes.length} bytes`);
       console.log(`   Payload preview: ${payload.substring(0, 100).replace(/\n/g, '\\n')}...`);
-      
+
       // Ensure payload is valid UTF-8 and doesn't have BOM or other issues
       try {
         // Verify it's valid UTF-8
@@ -376,7 +391,7 @@ class YouTubeCaptionPublisher {
         console.error('❌ Payload is not valid UTF-8, skipping');
         return;
       }
-      
+
       // Send as Buffer to ensure raw bytes are sent (matching Python implementation)
       const response = await axios.post(
         urlWithParams,
@@ -414,89 +429,89 @@ class YouTubeCaptionPublisher {
           console.warn(`   Response body: ${JSON.stringify(response.data).substring(0, 200)}`);
         }
       }
-      } catch (error) {
-        // Always log errors (not just 10% of the time) so user knows what's happening
-        const duration = Date.now() - startTime;
-        
-        // Enhanced error logging for debugging - use try-catch to ensure we can always log
-        try {
-          console.error(`❌ YouTube caption POST failed: ${error.response?.status || 'No response'} ${error.response?.statusText || error.message} (${duration}ms)`);
-          console.error(`   Sequence: ${this.sequenceNumber}`);
-          
-          // Safely access variables that might not exist if error occurred early
-          if (typeof timestamp !== 'undefined') {
-            console.error(`   Timestamp: ${timestamp}`);
-          }
-          if (typeof cleanedLines !== 'undefined') {
-            console.error(`   Caption lines: ${cleanedLines.length}`);
-            if (typeof isMultiLine !== 'undefined' && isMultiLine) {
-              console.error(`   🔴 MULTI-LINE CAPTION THAT FAILED:`);
-              cleanedLines.forEach((line, idx) => {
-                console.error(`      Line ${idx + 1}: "${line}" (${line.length} chars)`);
-              });
-              if (typeof finalCaption !== 'undefined') {
-                console.error(`   Final caption: ${JSON.stringify(finalCaption)}`);
-              }
-            } else if (typeof finalCaption !== 'undefined') {
-              console.error(`   Single-line caption: "${finalCaption}"`);
-            }
-          }
-          if (typeof payloadBytes !== 'undefined') {
-            console.error(`   Payload length: ${payloadBytes.length} bytes`);
-            if (typeof payload !== 'undefined') {
-              console.error(`   Payload preview: ${payload.substring(0, 150).replace(/\n/g, '\\n')}`);
-              console.error(`   Payload hex: ${payloadBytes.slice(0, 100).toString('hex')}`);
-            }
-          }
-        } catch (logError) {
-          console.error(`   (Error logging details failed: ${logError.message})`);
+    } catch (error) {
+      // Always log errors (not just 10% of the time) so user knows what's happening
+      const duration = Date.now() - startTime;
+
+      // Enhanced error logging for debugging - use try-catch to ensure we can always log
+      try {
+        console.error(`❌ YouTube caption POST failed: ${error.response?.status || 'No response'} ${error.response?.statusText || error.message} (${duration}ms)`);
+        console.error(`   Sequence: ${this.sequenceNumber}`);
+
+        // Safely access variables that might not exist if error occurred early
+        if (typeof timestamp !== 'undefined') {
+          console.error(`   Timestamp: ${timestamp}`);
         }
-        
-        if (error.response) {
-          // Server responded with error status
-          if (error.response.data) {
-            const errorData = typeof error.response.data === 'string' 
-              ? error.response.data 
-              : JSON.stringify(error.response.data);
-            console.error(`   Error response: ${errorData.substring(0, 300)}`);
-            
-            // If multi-line caption failed with "Can't parse", try as single-line
-            if (error.response.status === 400 && 
-                typeof errorData === 'string' && 
-                errorData.includes("Can't parse") &&
-                isMultiLine &&
-                cleanedLines.length > 0) {
-              console.warn(`   ⚠️ Multi-line caption failed, retrying as single-line...`);
-              // Retry as single-line (join with space instead of newline)
-              const singleLineCaption = cleanedLines.join(' ').substring(0, 64); // YouTube max is typically 64 chars for single line
-              const retryPayload = `${timestamp}\n${singleLineCaption}\n`;
-              const retryPayloadBytes = Buffer.from(retryPayload, 'utf-8');
-              
-              try {
-                const retryResponse = await axios.post(
-                  urlWithParams,
-                  retryPayloadBytes,
-                  {
-                    timeout: 10000,
-                    headers: {
-                      'Content-Type': 'text/plain; charset=utf-8',
-                      'User-Agent': 'Soniox-Streamer/1.0',
-                    },
-                    transformRequest: [(data) => {
-                      if (Buffer.isBuffer(data)) return data;
-                      return data;
-                    }],
-                  }
-                );
-                if (retryResponse.status === 200) {
-                  console.log(`   ✅ Retry as single-line succeeded (seq: ${this.sequenceNumber})`);
-                  return; // Success on retry
+        if (typeof cleanedLines !== 'undefined') {
+          console.error(`   Caption lines: ${cleanedLines.length}`);
+          if (typeof isMultiLine !== 'undefined' && isMultiLine) {
+            console.error(`   🔴 MULTI-LINE CAPTION THAT FAILED:`);
+            cleanedLines.forEach((line, idx) => {
+              console.error(`      Line ${idx + 1}: "${line}" (${line.length} chars)`);
+            });
+            if (typeof finalCaption !== 'undefined') {
+              console.error(`   Final caption: ${JSON.stringify(finalCaption)}`);
+            }
+          } else if (typeof finalCaption !== 'undefined') {
+            console.error(`   Single-line caption: "${finalCaption}"`);
+          }
+        }
+        if (typeof payloadBytes !== 'undefined') {
+          console.error(`   Payload length: ${payloadBytes.length} bytes`);
+          if (typeof payload !== 'undefined') {
+            console.error(`   Payload preview: ${payload.substring(0, 150).replace(/\n/g, '\\n')}`);
+            console.error(`   Payload hex: ${payloadBytes.slice(0, 100).toString('hex')}`);
+          }
+        }
+      } catch (logError) {
+        console.error(`   (Error logging details failed: ${logError.message})`);
+      }
+
+      if (error.response) {
+        // Server responded with error status
+        if (error.response.data) {
+          const errorData = typeof error.response.data === 'string'
+            ? error.response.data
+            : JSON.stringify(error.response.data);
+          console.error(`   Error response: ${errorData.substring(0, 300)}`);
+
+          // If multi-line caption failed with "Can't parse", try as single-line
+          if (error.response.status === 400 &&
+            typeof errorData === 'string' &&
+            errorData.includes("Can't parse") &&
+            isMultiLine &&
+            cleanedLines.length > 0) {
+            console.warn(`   ⚠️ Multi-line caption failed, retrying as single-line...`);
+            // Retry as single-line (join with space instead of newline)
+            const singleLineCaption = cleanedLines.join(' ').substring(0, 64); // YouTube max is typically 64 chars for single line
+            const retryPayload = `${timestamp}\n${singleLineCaption}\n`;
+            const retryPayloadBytes = Buffer.from(retryPayload, 'utf-8');
+
+            try {
+              const retryResponse = await axios.post(
+                urlWithParams,
+                retryPayloadBytes,
+                {
+                  timeout: 10000,
+                  headers: {
+                    'Content-Type': 'text/plain; charset=utf-8',
+                    'User-Agent': 'Soniox-Streamer/1.0',
+                  },
+                  transformRequest: [(data) => {
+                    if (Buffer.isBuffer(data)) return data;
+                    return data;
+                  }],
                 }
-              } catch (retryError) {
-                console.error(`   ❌ Retry as single-line also failed: ${retryError.message}`);
+              );
+              if (retryResponse.status === 200) {
+                console.log(`   ✅ Retry as single-line succeeded (seq: ${this.sequenceNumber})`);
+                return; // Success on retry
               }
+            } catch (retryError) {
+              console.error(`   ❌ Retry as single-line also failed: ${retryError.message}`);
             }
           }
+        }
       } else if (error.request) {
         // Request was made but no response received
         console.error(`❌ YouTube caption POST failed: No response received (timeout or network error) (${duration}ms)`);
@@ -552,10 +567,67 @@ function broadcastToCaptions(text) {
 }
 
 /**
+ * Broadcast caption to audience viewers via SSE
+ * Maintains a buffer of last N captions for new connections
+ */
+function broadcastToAudience(text, isFinal = false) {
+  if (!text) return;
+
+  // Only add final captions to audience buffer
+  if (isFinal) {
+    const timestamp = new Date().toISOString();
+    const caption = { text, timestamp, type: 'caption' };
+
+    // Add to buffer (no limit - show all captions)
+    audienceCaptionBuffer.push(caption);
+
+    // Broadcast to all connected audience viewers
+    const data = JSON.stringify(caption);
+    audienceSSEClients.forEach(client => {
+      try {
+        client.write(`data: ${data}\n\n`);
+      } catch (error) {
+        // Client disconnected, will be cleaned up on close event
+      }
+    });
+  }
+}
+
+/**
+ * Broadcast service status to audience viewers
+ * Shows pre-service, live, paused, ended states
+ */
+function broadcastServiceStatus(status, message) {
+  serviceStatus = {
+    type: 'status',
+    status: status,  // 'offline', 'connecting', 'ready', 'paused', 'ended'
+    message: message,
+    timestamp: new Date().toISOString()
+  };
+
+  const data = JSON.stringify(serviceStatus);
+  audienceSSEClients.forEach(client => {
+    try {
+      client.write(`data: ${data}\n\n`);
+    } catch (error) {
+      // Client disconnected
+    }
+  });
+
+  console.log(`📢 Service status broadcast: ${status} - ${message}`);
+}
+
+/**
  * Serve the client.html file as default homepage
  */
+// Home page - serve audience page
 app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/client.html');
+  res.sendFile(path.join(__dirname, 'audience.html'));
+});
+
+// Client/admin page
+app.get('/client', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client.html'));
 });
 
 /**
@@ -863,35 +935,60 @@ app.get('/transcript', (req, res) => {
     let captions = [];
 
     // Parse file data
+    // Format: timestamp\ttext\ttag (tag is optional)
     if (data) {
       const lines = data.split('\n').filter(line => line.trim());
       captions = lines.map(line => {
         const parts = line.split('\t');
-        return {
-          timestamp: parts[0],
-          text: parts.slice(1).join('\t') // Handle text with tabs
-        };
+        if (parts.length >= 3) {
+          // Has tag: timestamp, text (may contain tabs), tag
+          return {
+            timestamp: parts[0],
+            text: parts.slice(1, -1).join('\t'), // Text is everything except first (timestamp) and last (tag)
+            tag: parts[parts.length - 1] || '' // Last part is tag
+          };
+        } else if (parts.length === 2) {
+          // No tag: timestamp, text
+          return {
+            timestamp: parts[0],
+            text: parts[1],
+            tag: ''
+          };
+        } else {
+          // Fallback (shouldn't happen)
+          return {
+            timestamp: parts[0] || '',
+            text: parts.slice(1).join('\t'),
+            tag: ''
+          };
+        }
       });
     }
 
     // Get captions to display (all if limit is 0, otherwise last N)
     const displayCaptions = limit > 0 ? captions.slice(-limit) : captions;
-    
+
     // Get time offset from query parameter (if provided from frontend)
     const timeOffset = parseInt(req.query.offset) || 0;
+    const tz = req.query.tz || undefined;
 
     // Export formats
     if (format === 'json') {
       // Apply time offset to timestamps if provided
-      const exportCaptions = timeOffset !== 0 
+      const exportCaptions = timeOffset !== 0
         ? displayCaptions.map(c => ({
-            timestamp: new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString(),
-            originalTimestamp: c.timestamp,
-            text: c.text
-          }))
-        : displayCaptions;
-      return res.json({ 
-        captions: exportCaptions, 
+          timestamp: new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString(),
+          originalTimestamp: c.timestamp,
+          text: c.text,
+          tag: c.tag || ''
+        }))
+        : displayCaptions.map(c => ({
+          timestamp: c.timestamp,
+          text: c.text,
+          tag: c.tag || ''
+        }));
+      return res.json({
+        captions: exportCaptions,
         total: captions.length,
         timeOffset: timeOffset !== 0 ? timeOffset : undefined
       });
@@ -901,16 +998,20 @@ app.get('/transcript', (req, res) => {
       const includeTimestamp = req.query.timestamp !== 'false';
       let csv;
       if (includeTimestamp) {
-        csv = 'Timestamp,Caption\n' + displayCaptions.map(c => {
-          const timestamp = timeOffset !== 0 
-            ? new Date(new Date(c.timestamp).getTime() + timeOffset).toISOString()
-            : c.timestamp;
-          return `"${timestamp}","${c.text.replace(/"/g, '""')}"`;
+        csv = 'Timestamp,Caption,Tag\n' + displayCaptions.map(c => {
+          const dateObj = timeOffset !== 0
+            ? new Date(new Date(c.timestamp).getTime() + timeOffset)
+            : new Date(c.timestamp);
+          const dateOpts = tz ? { timeZone: tz } : undefined;
+          const displayTimestamp = tz ? `${dateObj.toLocaleDateString(undefined, dateOpts)} ${dateObj.toLocaleTimeString(undefined, dateOpts)}` : dateObj.toISOString();
+          const tag = c.tag || '';
+          return `"${displayTimestamp}","${c.text.replace(/"/g, '""')}","${tag.replace(/"/g, '""')}"`;
         }).join('\n');
       } else {
-        csv = 'Caption\n' + displayCaptions.map(c =>
-          `"${c.text.replace(/"/g, '""')}"`
-        ).join('\n');
+        csv = 'Caption,Tag\n' + displayCaptions.map(c => {
+          const tag = c.tag || '';
+          return `"${c.text.replace(/"/g, '""')}","${tag.replace(/"/g, '""')}"`;
+        }).join('\n');
       }
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.csv"`);
@@ -925,10 +1026,16 @@ app.get('/transcript', (req, res) => {
           const date = timeOffset !== 0
             ? new Date(new Date(c.timestamp).getTime() + timeOffset)
             : new Date(c.timestamp);
-          return `[${date.toLocaleString()}] ${c.text}`;
+          const dateOpts = tz ? { timeZone: tz } : undefined;
+          const dateStr = tz ? `${date.toLocaleDateString(undefined, dateOpts)} ${date.toLocaleTimeString(undefined, dateOpts)}` : date.toLocaleString();
+          const tag = c.tag ? `[${c.tag}] ` : '';
+          return `[${dateStr}] ${tag}${c.text}`;
         }).join('\n\n');
       } else {
-        txt = displayCaptions.map(c => c.text).join('\n\n');
+        txt = displayCaptions.map(c => {
+          const tag = c.tag ? `[${c.tag}] ` : '';
+          return `${tag}${c.text}`;
+        }).join('\n\n');
       }
       res.setHeader('Content-Type', 'text/plain');
       res.setHeader('Content-Disposition', `attachment; filename="transcript-${new Date().toISOString().split('T')[0]}.txt"`);
@@ -938,33 +1045,33 @@ app.get('/transcript', (req, res) => {
     if (format === 'srt') {
       // SRT (SubRip) subtitle format
       // Format: sequence number, timestamp range, caption text, blank line
-      
+
       if (displayCaptions.length === 0) {
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.srt"`);
         return res.send('');
       }
-      
+
       // Get time offset from query parameter (if provided from frontend)
       const timeOffset = parseInt(req.query.offset) || 0;
-      
+
       // Helper function to convert milliseconds to SRT time format (HH:MM:SS,mmm)
       function toSRTTime(totalMs) {
         // Ensure non-negative
         totalMs = Math.max(0, totalMs);
-        
+
         const hours = Math.floor(totalMs / 3600000);
         const minutes = Math.floor((totalMs % 3600000) / 60000);
         const seconds = Math.floor((totalMs % 60000) / 1000);
         const milliseconds = totalMs % 1000;
-        
+
         return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
       }
-      
+
       // Get first caption's adjusted timestamp
       const firstCaptionOriginalTime = new Date(displayCaptions[0].timestamp).getTime();
       const firstCaptionAdjustedTime = firstCaptionOriginalTime + timeOffset;
-      
+
       // Parse the start time from the query parameter if provided (format: HH:MM:SS)
       // This is the relative start time the user set (e.g., "00:05:30")
       let startTimeMs = 0; // Default to 00:00:00
@@ -975,23 +1082,23 @@ app.get('/transcript', (req, res) => {
         const seconds = parseInt(timeParts[2]) || 0;
         startTimeMs = (hours * 3600000) + (minutes * 60000) + (seconds * 1000);
       }
-      
+
       const defaultDuration = 3000; // 3 seconds in milliseconds
       const maxDuration = 8000; // Max 8 seconds per caption
       const minDuration = 1000; // Min 1 second per caption
-      
+
       let srtContent = '';
       let sequenceNumber = 1;
-      
+
       for (let i = 0; i < displayCaptions.length; i++) {
         const caption = displayCaptions[i];
         // Apply time offset to get adjusted timestamp
         const captionOriginalTime = new Date(caption.timestamp).getTime();
         const captionAdjustedTime = captionOriginalTime + timeOffset;
-        
+
         // Calculate relative time from first caption (in milliseconds)
         const relativeStart = captionAdjustedTime - firstCaptionAdjustedTime;
-        
+
         // Calculate end time
         let relativeEnd;
         if (i < displayCaptions.length - 1) {
@@ -1003,25 +1110,25 @@ app.get('/transcript', (req, res) => {
           // Last caption: use default duration
           relativeEnd = relativeStart + defaultDuration;
         }
-        
+
         // Format SRT entry - start from the user's set start time, then add relative offset
         const startSRT = toSRTTime(startTimeMs + relativeStart);
         const endSRT = toSRTTime(startTimeMs + relativeEnd);
-        
+
         // Clean caption text (remove control characters, preserve line breaks if needed)
         const cleanText = caption.text
           .replace(/\r\n/g, '\n')
           .replace(/\r/g, '\n')
           .replace(/\n{3,}/g, '\n\n'); // Max 2 consecutive newlines
-        
+
         srtContent += `${sequenceNumber}\n`;
         srtContent += `${startSRT} --> ${endSRT}\n`;
         srtContent += `${cleanText}\n`;
         srtContent += `\n`; // Blank line between entries
-        
+
         sequenceNumber++;
       }
-      
+
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="captions-${new Date().toISOString().split('T')[0]}.srt"`);
       return res.send(srtContent);
@@ -1030,21 +1137,38 @@ app.get('/transcript', (req, res) => {
     // HTML view (default)
     const captionHTML = displayCaptions.length > 0
       ? displayCaptions.map((c, index) => {
-          const time = new Date(c.timestamp).toLocaleTimeString();
-          const date = new Date(c.timestamp).toLocaleDateString();
-          return `
-            <div class="caption-item" data-timestamp="${c.timestamp}" data-index="${index}">
+        const time = new Date(c.timestamp).toLocaleTimeString();
+        const date = new Date(c.timestamp).toLocaleDateString();
+        const tag = c.tag || '';
+        const tagDisplay = tag ? `<span class="caption-tag tag-${tag.replace(/\s+/g, '-')}">[${tag}]</span>` : '';
+        return `
+            <div class="caption-item" data-timestamp="${c.timestamp}" data-index="${index}" data-tag="${escapeHtml(tag)}">
               <div class="caption-header">
                 <div class="caption-time">
+                  ${tagDisplay}
                   <span class="date">${date}</span>
                   <span class="time">${time}</span>
                 </div>
-                <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                <div class="caption-actions">
+                  <div class="tag-buttons">
+                    <button class="tag-btn ${tag === 'prophecy' ? 'active' : ''}" onclick="setTag(this, 'prophecy')" title="Tag as prophecy">🔮</button>
+                    <button class="tag-btn ${tag === 'healing declaration' ? 'active' : ''}" onclick="setTag(this, 'healing declaration')" title="Tag as healing declaration">💚</button>
+                    <button class="tag-btn ${tag === 'scripture' ? 'active' : ''}" onclick="setTag(this, 'scripture')" title="Tag as scripture">📖</button>
+                    <button class="tag-btn ${tag === 'person call out' ? 'active' : ''}" onclick="setTag(this, 'person call out')" title="Tag as person call out">👤</button>
+                    <button class="tag-btn ${tag === 'emphasis' ? 'active' : ''}" onclick="setTag(this, 'emphasis')" title="Tag as emphasis">⭐</button>
+                    <button class="tag-btn ${tag === 'POINT' ? 'active' : ''}" onclick="setTag(this, 'POINT')" title="Tag as POINT">📌</button>
+                    <button class="tag-btn ${tag === 'ignore' ? 'active' : ''}" onclick="setTag(this, 'ignore')" title="Tag as ignore">🚫</button>
+                    ${tag ? `<button class="tag-btn tag-clear" onclick="setTag(this, '')" title="Remove tag">✕</button>` : ''}
+                  </div>
+                  <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                  <button class="replace-btn" onclick="replaceWithTongues(this)" title="Replace with (speaking in tongues)">🔄</button>
+                  <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
+                </div>
               </div>
-              <div class="caption-text" data-original="${escapeHtml(c.text).replace(/"/g, '&quot;')}">${escapeHtml(c.text)}</div>
+              <div class="caption-text" data-original="${escapeHtml(c.text).replace(/"/g, '&quot;')}" onclick="if(!this.closest('.caption-item').classList.contains('editing')) editCaption(this.closest('.caption-item').querySelector('.edit-btn'))" style="cursor: pointer;" title="Click to edit">${escapeHtml(c.text)}</div>
             </div>
           `;
-        }).join('')
+      }).join('')
       : '<div class="no-captions">No captions yet. Captions will appear here as they are spoken.</div>';
 
     const html = `
@@ -1109,64 +1233,13 @@ app.get('/transcript', (req, res) => {
               margin-top: 10px;
               font-size: 11px;
             }
-            .time-adjustment {
-              margin-top: 10px;
-              padding: 10px;
-              background: #1e1e1e;
-              border: 1px solid #3e3e42;
-              border-radius: 3px;
-              display: flex;
-              align-items: center;
-              gap: 10px;
-              flex-wrap: wrap;
-            }
-            .time-adjustment label {
-              color: #9cdcfe;
-              font-size: 12px;
-              font-weight: 600;
-            }
-            .time-adjustment input {
-              background: #3c3c3c;
-              color: #d4d4d4;
-              border: 1px solid #555;
-              padding: 5px 10px;
-              border-radius: 3px;
-              font-family: inherit;
-              font-size: 12px;
-            }
-            .time-adjustment button {
-              background: #0e639c;
-              color: white;
-              border: none;
-              padding: 5px 12px;
-              border-radius: 3px;
-              cursor: pointer;
-              font-size: 11px;
-              font-weight: 600;
-            }
-            .time-adjustment button:hover {
-              background: #1177bb;
-            }
-            .time-adjustment button.reset {
-              background: #c5534b;
-            }
-            .time-adjustment button.reset:hover {
-              background: #d16b64;
-            }
-            .time-offset-indicator {
-              color: #dcdcaa;
-              font-size: 11px;
-              font-weight: 600;
-              display: none;
-            }
-            .time-offset-indicator.active {
-              display: inline;
-            }
+
             .content {
               background: #252526;
               border: 1px solid #3e3e42;
               border-radius: 4px;
               padding: 15px;
+              max-width: 100%;
             }
             .caption-item {
               padding: 12px;
@@ -1207,7 +1280,88 @@ app.get('/transcript', (req, res) => {
               color: #9cdcfe;
               font-weight: 600;
             }
-            .edit-btn {
+            .caption-actions {
+              display: flex;
+              gap: 6px;
+              align-items: center;
+            }
+            .tag-buttons {
+              display: flex;
+              gap: 4px;
+              margin-right: 4px;
+              opacity: 0;
+              transition: all 0.2s;
+            }
+            .caption-item:hover .tag-buttons {
+              opacity: 1;
+            }
+            .tag-btn {
+              background: transparent;
+              border: 1px solid transparent;
+              color: #858585;
+              cursor: pointer;
+              padding: 3px 6px;
+              border-radius: 3px;
+              font-size: 11px;
+              transition: all 0.2s;
+            }
+            .tag-btn:hover {
+              background: #3e3e42;
+              border-color: #858585;
+            }
+            .tag-btn.active {
+              background: #4ec9b0;
+              border-color: #4ec9b0;
+              color: #1e1e1e;
+            }
+            .tag-btn.tag-clear {
+              font-size: 10px;
+              padding: 2px 5px;
+            }
+            .tag-btn.tag-clear:hover {
+              background: #c5534b;
+              border-color: #c5534b;
+              color: white;
+            }
+            .caption-tag {
+              display: inline-block;
+              padding: 2px 6px;
+              border-radius: 3px;
+              font-size: 9px;
+              font-weight: 600;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+              margin-right: 8px;
+            }
+            .caption-tag.tag-prophecy {
+              background: rgba(156, 39, 176, 0.3);
+              color: #ce93d8;
+            }
+            .caption-tag.tag-healing-declaration {
+              background: rgba(76, 175, 80, 0.3);
+              color: #81c784;
+            }
+            .caption-tag.tag-scripture {
+              background: rgba(33, 150, 243, 0.3);
+              color: #64b5f6;
+            }
+            .caption-tag.tag-ignore {
+              background: rgba(158, 158, 158, 0.3);
+              color: #bdbdbd;
+            }
+            .caption-tag.tag-person-call-out {
+              background: rgba(255, 152, 0, 0.3);
+              color: #ffb74d;
+            }
+            .caption-tag.tag-emphasis {
+              background: rgba(255, 235, 59, 0.3);
+              color: #fff59d;
+            }
+            .caption-tag.tag-POINT {
+              background: rgba(244, 67, 54, 0.3);
+              color: #ef5350;
+            }
+            .edit-btn, .replace-btn, .delete-btn {
               background: transparent;
               border: 1px solid transparent;
               color: #858585;
@@ -1218,7 +1372,9 @@ app.get('/transcript', (req, res) => {
               opacity: 0;
               transition: all 0.2s;
             }
-            .caption-item:hover .edit-btn {
+            .caption-item:hover .edit-btn,
+            .caption-item:hover .replace-btn,
+            .caption-item:hover .delete-btn {
               opacity: 1;
             }
             .edit-btn:hover {
@@ -1226,11 +1382,29 @@ app.get('/transcript', (req, res) => {
               border-color: #4ec9b0;
               color: #4ec9b0;
             }
+            .replace-btn:hover {
+              background: #3e3e42;
+              border-color: #dcdcaa;
+              color: #dcdcaa;
+            }
+            .delete-btn:hover {
+              background: #3e3e42;
+              border-color: #f44336;
+              color: #f44336;
+            }
             .caption-text {
               color: #d4d4d4;
               font-size: 14px;
               line-height: 1.6;
               min-height: 20px;
+              cursor: pointer;
+              word-wrap: break-word;
+              word-break: normal;
+              max-width: 100%;
+            }
+            .caption-text:hover {
+              background: rgba(78, 201, 176, 0.1);
+              border-radius: 3px;
             }
             .caption-text[contenteditable="true"] {
               background: #1e1e1e;
@@ -1238,6 +1412,7 @@ app.get('/transcript', (req, res) => {
               border: 1px solid #4ec9b0;
               border-radius: 3px;
               outline: none;
+              cursor: text;
             }
             .caption-text[contenteditable="true"]:focus {
               border-color: #5fd4c3;
@@ -1314,166 +1489,29 @@ app.get('/transcript', (req, res) => {
               Showing ${displayCaptions.length.toLocaleString()} of ${captions.length.toLocaleString()} captions
               ${limit > 0 ? `(limited to last ${limit})` : '(showing all)'}
               ${captions.length > 10000 ? '<br><span style="color: #dcdcaa;">⚠️ Large file detected. Consider using ?limit=N to view recent captions only.</span>' : ''}
-              <span class="time-offset-indicator" id="timeOffsetIndicator"></span>
-            </div>
-            <div class="time-adjustment">
-              <label for="startTime">⏰ Adjust Start Time:</label>
-              <input type="time" id="startTime" step="1" title="Set start time in 24-hour format (e.g., 00:00:00 for video start, 01:23:45 for 1h 23m 45s into video)" placeholder="HH:MM:SS">
-              <button onclick="applyTimeOffset()">Apply</button>
-              <button class="reset" onclick="resetTimeOffset()">Reset to Actual</button>
-              <span style="font-size: 11px; color: #858585; margin-left: 10px;">
-                💡 Use 24-hour format (00:00:00 to 23:59:59) - perfect for video timecodes
-              </span>
             </div>
           </div>
           <div class="content" id="captionsContainer">
             ${captionHTML}
           </div>
           <script>
-            // Time adjustment state
-            let timeOffsetMs = parseInt(localStorage.getItem('transcriptTimeOffset')) || 0;
-            let startTimeValue = localStorage.getItem('transcriptStartTime') || ''; // Store the start time string (e.g., "00:05:30")
-            let firstCaptionTimestamp = null;
+            // Fix server-rendered timestamps to match client locale/timezone
+            // This ensures initial loading captions match the timezone of live SSE captions
+            document.querySelectorAll('.caption-item').forEach(item => {
+              const timestamp = item.getAttribute('data-timestamp');
+              if (timestamp) {
+                const dateObj = new Date(timestamp);
+                const dateSpan = item.querySelector('.caption-time .date');
+                const timeSpan = item.querySelector('.caption-time .time');
+                if (dateSpan) dateSpan.textContent = dateObj.toLocaleDateString();
+                if (timeSpan) timeSpan.textContent = dateObj.toLocaleTimeString();
+              }
+            });
 
             // Smart autoscroll state
             let isUserScrolling = false;
             let autoScrollEnabled = true;
             let scrollTimeout;
-
-            // Initialize time offset on load
-            function initTimeOffset() {
-              // Get first caption timestamp
-              const firstCaption = document.querySelector('.caption-item');
-              if (firstCaption) {
-                firstCaptionTimestamp = firstCaption.getAttribute('data-timestamp');
-                
-                // Load start time from localStorage if available
-                const savedStartTime = localStorage.getItem('transcriptStartTime');
-                if (savedStartTime) {
-                  startTimeValue = savedStartTime;
-                  document.getElementById('startTime').value = savedStartTime;
-                }
-                
-                // If offset exists, apply it and update indicator
-                if (timeOffsetMs !== 0) {
-                  updateTimeOffsetIndicator();
-                  applyStoredOffset();
-                }
-              }
-            }
-
-            // Apply time offset
-            function applyTimeOffset() {
-              const startTimeInput = document.getElementById('startTime').value;
-              if (!startTimeInput) {
-                alert('Please select a start time');
-                return;
-              }
-
-              if (!firstCaptionTimestamp) {
-                alert('No captions available');
-                return;
-              }
-
-              // Parse the input time (HH:MM:SS)
-              const [hours, minutes, seconds] = startTimeInput.split(':').map(Number);
-              
-              // Create target time using today's date
-              const targetDate = new Date();
-              targetDate.setHours(hours, minutes, seconds || 0, 0);
-              const targetMs = targetDate.getTime();
-
-              // Get first caption's actual timestamp
-              const firstCaptionDate = new Date(firstCaptionTimestamp);
-              const firstCaptionMs = firstCaptionDate.getTime();
-
-              // Calculate offset
-              timeOffsetMs = targetMs - firstCaptionMs;
-
-              // Save to localStorage
-              localStorage.setItem('transcriptTimeOffset', timeOffsetMs);
-              localStorage.setItem('transcriptStartTime', startTimeInput); // Store the start time string
-
-              // Store start time value
-              startTimeValue = startTimeInput;
-
-              // Apply to all captions
-              applyOffsetToAllCaptions();
-              updateTimeOffsetIndicator();
-            }
-
-            // Reset time offset
-            function resetTimeOffset() {
-              timeOffsetMs = 0;
-              startTimeValue = '';
-              localStorage.removeItem('transcriptTimeOffset');
-              localStorage.removeItem('transcriptStartTime');
-              document.getElementById('startTime').value = '';
-              
-              // Restore all original times
-              const captions = document.querySelectorAll('.caption-item');
-              captions.forEach(caption => {
-                const originalTimestamp = caption.getAttribute('data-timestamp');
-                if (originalTimestamp) {
-                  const date = new Date(originalTimestamp);
-                  const timeSpan = caption.querySelector('.caption-time .time');
-                  const dateSpan = caption.querySelector('.caption-time .date');
-                  if (timeSpan) timeSpan.textContent = date.toLocaleTimeString();
-                  if (dateSpan) dateSpan.textContent = date.toLocaleDateString();
-                }
-              });
-
-              // Hide indicator
-              const indicator = document.getElementById('timeOffsetIndicator');
-              indicator.classList.remove('active');
-              indicator.textContent = '';
-            }
-
-            // Apply offset to all captions
-            function applyOffsetToAllCaptions() {
-              const captions = document.querySelectorAll('.caption-item');
-              captions.forEach(caption => {
-                const originalTimestamp = caption.getAttribute('data-timestamp');
-                if (originalTimestamp) {
-                  const originalDate = new Date(originalTimestamp);
-                  const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
-                  
-                  const timeSpan = caption.querySelector('.caption-time .time');
-                  const dateSpan = caption.querySelector('.caption-time .date');
-                  if (timeSpan) timeSpan.textContent = adjustedDate.toLocaleTimeString();
-                  if (dateSpan) dateSpan.textContent = adjustedDate.toLocaleDateString();
-                }
-              });
-            }
-
-            // Apply stored offset on page load
-            function applyStoredOffset() {
-              if (timeOffsetMs !== 0) {
-                applyOffsetToAllCaptions();
-              }
-            }
-
-            // Update time offset indicator
-            function updateTimeOffsetIndicator() {
-              const indicator = document.getElementById('timeOffsetIndicator');
-              if (timeOffsetMs !== 0) {
-                const offsetHours = Math.floor(Math.abs(timeOffsetMs) / 3600000);
-                const offsetMinutes = Math.floor((Math.abs(timeOffsetMs) % 3600000) / 60000);
-                const offsetSeconds = Math.floor((Math.abs(timeOffsetMs) % 60000) / 1000);
-                const sign = timeOffsetMs >= 0 ? '+' : '-';
-                
-                let offsetStr = '';
-                if (offsetHours > 0) offsetStr += \`\${offsetHours}h \`;
-                if (offsetMinutes > 0) offsetStr += \`\${offsetMinutes}m \`;
-                if (offsetSeconds > 0 || offsetStr === '') offsetStr += \`\${offsetSeconds}s\`;
-                
-                indicator.textContent = \` (Time adjusted: \${sign}\${offsetStr})\`;
-                indicator.classList.add('active');
-              } else {
-                indicator.classList.remove('active');
-                indicator.textContent = '';
-              }
-            }
 
             // Detect if user is at bottom of page
             function isAtBottom() {
@@ -1518,36 +1556,27 @@ app.get('/transcript', (req, res) => {
               switch(value) {
                 case 'txt-with':
                   url = '/transcript?format=txt&timestamp=true';
-                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'txt-without':
                   url = '/transcript?format=txt&timestamp=false';
                   break;
                 case 'csv-with':
                   url = '/transcript?format=csv&timestamp=true';
-                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'csv-without':
                   url = '/transcript?format=csv&timestamp=false';
                   break;
                 case 'json':
                   url = '/transcript?format=json';
-                  if (timeOffsetMs !== 0) url += '&offset=' + timeOffsetMs;
                   break;
                 case 'srt':
                   url = '/transcript?format=srt';
-                  // Include time offset if set
-                  if (timeOffsetMs !== 0) {
-                    url += '&offset=' + timeOffsetMs;
-                  }
-                  // Include start time if set (for SRT base time)
-                  if (startTimeValue) {
-                    url += '&startTime=' + encodeURIComponent(startTimeValue);
-                  }
                   break;
               }
 
               if (url) {
+                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (tz) url += '&tz=' + encodeURIComponent(tz);
                 window.location.href = url;
               }
 
@@ -1570,6 +1599,37 @@ app.get('/transcript', (req, res) => {
                   })
                   .catch(err => alert('Error clearing captions: ' + err.message));
               }
+            }
+
+            // Tag management function
+            function setTag(button, tag) {
+              const captionItem = button.closest('.caption-item');
+              const timestamp = captionItem.getAttribute('data-timestamp');
+              
+              if (!timestamp) {
+                console.error('No timestamp found for caption');
+                return;
+              }
+              
+              // Update tag via API
+              fetch('/transcript/tag', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timestamp, tag })
+              })
+              .then(res => res.json())
+              .then(data => {
+                if (data.success) {
+                  // Reload page to show updated tag
+                  location.reload();
+                } else {
+                  alert('Failed to update tag: ' + (data.error || 'Unknown error'));
+                }
+              })
+              .catch(err => {
+                console.error('Error updating tag:', err);
+                alert('Error updating tag: ' + err.message);
+              });
             }
 
             // Inline editing functionality
@@ -1604,6 +1664,22 @@ app.get('/transcript', (req, res) => {
               \`;
               captionItem.appendChild(actionsDiv);
               
+              // Add Enter key handler for instant save
+              const enterHandler = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const saveBtn = actionsDiv.querySelector('.save-btn');
+                  if (saveBtn) {
+                    saveEdit(saveBtn);
+                  }
+                }
+              };
+              captionText.addEventListener('keydown', enterHandler);
+              
+              // Store handler for cleanup
+              captionText._enterHandler = enterHandler;
+              
               // Hide edit button
               button.style.display = 'none';
             }
@@ -1612,6 +1688,12 @@ app.get('/transcript', (req, res) => {
               const captionItem = button.closest('.caption-item');
               const captionText = captionItem.querySelector('.caption-text');
               const originalText = captionText.getAttribute('data-original');
+              
+              // Remove Enter key handler
+              if (captionText._enterHandler) {
+                captionText.removeEventListener('keydown', captionText._enterHandler);
+                delete captionText._enterHandler;
+              }
               
               // Restore original text (decode HTML entities)
               const textarea = document.createElement('textarea');
@@ -1628,8 +1710,109 @@ app.get('/transcript', (req, res) => {
               captionItem.querySelector('.edit-btn').style.display = '';
             }
 
-            function saveEdit(button) {
+            function replaceWithTongues(button) {
               const captionItem = button.closest('.caption-item');
+              const timestamp = captionItem.getAttribute('data-timestamp');
+              const newText = '(speaking in tongues)';
+              
+              // Store original text before replacing
+              const captionText = captionItem.querySelector('.caption-text');
+              const originalText = captionText.getAttribute('data-original');
+              const currentText = captionText.textContent;
+              
+              // Replace text instantly
+              captionText.textContent = newText;
+              captionText.setAttribute('data-original', newText.replace(/"/g, '&quot;'));
+              
+              // Mark as edited
+              captionItem.classList.add('edited');
+              
+              // Add edited indicator if not already present
+              if (!captionItem.querySelector('.edited-indicator')) {
+                const timeDiv = captionItem.querySelector('.caption-time');
+                const indicator = document.createElement('span');
+                indicator.className = 'edited-indicator';
+                indicator.textContent = 'EDITED';
+                indicator.title = 'This caption has been manually edited';
+                timeDiv.appendChild(indicator);
+              }
+              
+              // Send update to server immediately
+              fetch('/transcript/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timestamp, newText })
+              })
+              .then(res => res.json())
+              .then(data => {
+                if (!data.success) {
+                  console.error('Failed to save replacement:', data.error);
+                  // Revert on error
+                  if (originalText) {
+                    const textarea = document.createElement('textarea');
+                    textarea.innerHTML = originalText;
+                    captionText.textContent = textarea.value;
+                    captionText.setAttribute('data-original', originalText);
+                  } else {
+                    captionText.textContent = currentText;
+                  }
+                  captionItem.classList.remove('edited');
+                  alert('Failed to save: ' + (data.error || 'Unknown error'));
+                }
+              })
+              .catch(err => {
+                console.error('Error saving replacement:', err);
+                // Revert on error
+                if (originalText) {
+                  const textarea = document.createElement('textarea');
+                  textarea.innerHTML = originalText;
+                  captionText.textContent = textarea.value;
+                  captionText.setAttribute('data-original', originalText);
+                } else {
+                  captionText.textContent = currentText;
+                }
+                captionItem.classList.remove('edited');
+                alert('Error saving replacement: ' + err.message);
+              });
+            }
+
+            function deleteCaption(button) {
+              const captionItem = button.closest('.caption-item');
+              const timestamp = captionItem.getAttribute('data-timestamp');
+              
+              // Delete immediately - no confirmation for live editing speed
+              // Send delete request to server
+              fetch('/transcript/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timestamp })
+              })
+              .then(response => response.json())
+              .then(data => {
+                if (data.success) {
+                  // Remove from DOM with animation
+                  captionItem.style.opacity = '0';
+                  captionItem.style.transform = 'translateX(-20px)';
+                  setTimeout(() => {
+                    captionItem.remove();
+                    // Update stats
+                    updateStats();
+                  }, 300);
+                } else {
+                  alert('Failed to delete caption: ' + (data.error || 'Unknown error'));
+                }
+              })
+              .catch(error => {
+                console.error('Error deleting caption:', error);
+                alert('Failed to delete caption. Check console for details.');
+              });
+            }
+
+            function saveEdit(button) {
+              // Get caption item from button or find currently editing item
+              const captionItem = button ? button.closest('.caption-item') : document.querySelector('.caption-item.editing');
+              if (!captionItem) return;
+              
               const captionText = captionItem.querySelector('.caption-text');
               const newText = captionText.textContent.trim();
               const timestamp = captionItem.getAttribute('data-timestamp');
@@ -1639,9 +1822,17 @@ app.get('/transcript', (req, res) => {
                 return;
               }
               
+              // Remove Enter key handler
+              if (captionText._enterHandler) {
+                captionText.removeEventListener('keydown', captionText._enterHandler);
+                delete captionText._enterHandler;
+              }
+              
               // Disable buttons during save
-              button.disabled = true;
-              button.textContent = '⏳ Saving...';
+              if (button) {
+                button.disabled = true;
+                button.textContent = '⏳ Saving...';
+              }
               
               // Send update to server
               fetch('/transcript/edit', {
@@ -1677,14 +1868,18 @@ app.get('/transcript', (req, res) => {
                   captionItem.querySelector('.edit-btn').style.display = '';
                 } else {
                   alert('Failed to save: ' + (data.error || 'Unknown error'));
-                  button.disabled = false;
-                  button.textContent = '💾 Save';
+                  if (button) {
+                    button.disabled = false;
+                    button.textContent = '💾 Save';
+                  }
                 }
               })
               .catch(err => {
                 alert('Error saving caption: ' + err.message);
-                button.disabled = false;
-                button.textContent = '💾 Save';
+                if (button) {
+                  button.disabled = false;
+                  button.textContent = '💾 Save';
+                }
               });
             }
 
@@ -1698,35 +1893,48 @@ app.get('/transcript', (req, res) => {
               const caption = JSON.parse(event.data);
               const container = document.getElementById('captionsContainer');
 
-              // Set first caption timestamp if not set
-              if (!firstCaptionTimestamp) {
-                firstCaptionTimestamp = caption.timestamp;
-              }
-
               // Remove "no captions" message if present
               const noCaptions = container.querySelector('.no-captions');
               if (noCaptions) {
                 noCaptions.remove();
               }
 
-              // Apply time offset if set
               const originalDate = new Date(caption.timestamp);
-              const adjustedDate = new Date(originalDate.getTime() + timeOffsetMs);
-              const time = adjustedDate.toLocaleTimeString();
-              const date = adjustedDate.toLocaleDateString();
+              const time = originalDate.toLocaleTimeString();
+              const date = originalDate.toLocaleDateString();
+              
+              // Get tag from caption (default to empty string)
+              const tag = caption.tag || '';
+              const tagDisplay = tag ? \`<span class="caption-tag tag-\${tag.replace(/\\s+/g, '-')}">[\${tag}]</span>\` : '';
 
               const captionDiv = document.createElement('div');
               captionDiv.className = 'caption-item';
               captionDiv.setAttribute('data-timestamp', caption.timestamp); // Store original timestamp
+              captionDiv.setAttribute('data-tag', tag); // Store tag for tag buttons
               captionDiv.innerHTML = \`
                 <div class="caption-header">
                   <div class="caption-time">
+                    \${tagDisplay}
                     <span class="date">\${date}</span>
                     <span class="time">\${time}</span>
                   </div>
-                  <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                  <div class="caption-actions">
+                    <div class="tag-buttons">
+                      <button class="tag-btn \${tag === 'prophecy' ? 'active' : ''}" onclick="setTag(this, 'prophecy')" title="Tag as prophecy">🔮</button>
+                      <button class="tag-btn \${tag === 'healing declaration' ? 'active' : ''}" onclick="setTag(this, 'healing declaration')" title="Tag as healing declaration">💚</button>
+                      <button class="tag-btn \${tag === 'scripture' ? 'active' : ''}" onclick="setTag(this, 'scripture')" title="Tag as scripture">📖</button>
+                      <button class="tag-btn \${tag === 'person call out' ? 'active' : ''}" onclick="setTag(this, 'person call out')" title="Tag as person call out">👤</button>
+                      <button class="tag-btn \${tag === 'emphasis' ? 'active' : ''}" onclick="setTag(this, 'emphasis')" title="Tag as emphasis">⭐</button>
+                      <button class="tag-btn \${tag === 'POINT' ? 'active' : ''}" onclick="setTag(this, 'POINT')" title="Tag as POINT">📌</button>
+                      <button class="tag-btn \${tag === 'ignore' ? 'active' : ''}" onclick="setTag(this, 'ignore')" title="Tag as ignore">🚫</button>
+                      \${tag ? \`<button class="tag-btn tag-clear" onclick="setTag(this, '')" title="Remove tag">✕</button>\` : ''}
+                    </div>
+                    <button class="edit-btn" onclick="editCaption(this)" title="Edit caption">✏️</button>
+                    <button class="replace-btn" onclick="replaceWithTongues(this)" title="Replace with (speaking in tongues)">🔄</button>
+                    <button class="delete-btn" onclick="deleteCaption(this)" title="Delete caption">🗑️</button>
+                  </div>
                 </div>
-                <div class="caption-text" data-original="\${caption.text.replace(/"/g, '&quot;')}">\${caption.text}</div>
+                <div class="caption-text" data-original="\${caption.text.replace(/"/g, '&quot;')}" onclick="if(!this.closest('.caption-item').classList.contains('editing')) editCaption(this.closest('.caption-item').querySelector('.edit-btn'))" style="cursor: pointer;" title="Click to edit">\${caption.text}</div>
               \`;
 
               container.appendChild(captionDiv);
@@ -1749,14 +1957,7 @@ app.get('/transcript', (req, res) => {
               // Reconnection is automatic
             };
 
-            // Initialize time offset on page load
-            window.addEventListener('DOMContentLoaded', initTimeOffset);
-            // Also call immediately in case DOMContentLoaded already fired
-            if (document.readyState === 'loading') {
-              document.addEventListener('DOMContentLoaded', initTimeOffset);
-            } else {
-              initTimeOffset();
-            }
+
           </script>
         </body>
       </html>
@@ -1777,7 +1978,20 @@ app.post('/transcript/clear', (req, res) => {
     }
     // Also clear in-memory history
     captionHistory.length = 0;
+    audienceCaptionBuffer = [];
+
+    // Broadcast clear event to all audience viewers
+    const clearEvent = JSON.stringify({ type: 'clear' });
+    audienceSSEClients.forEach(client => {
+      try {
+        client.write(`data: ${clearEvent}\n\n`);
+      } catch (error) {
+        // Client disconnected
+      }
+    });
+
     logger.info('Captions cleared by user');
+    console.log('🧹 Cleared captions from audience (transcript cleared)');
     res.json({ message: 'All captions cleared successfully' });
   });
 });
@@ -1787,35 +2001,38 @@ app.post('/transcript/clear', (req, res) => {
  */
 app.post('/transcript/edit', (req, res) => {
   const { timestamp, newText } = req.body;
-  
+
   if (!timestamp || !newText) {
     return res.status(400).json({ success: false, error: 'Missing timestamp or newText' });
   }
-  
+
   // Read the captions file
   fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
     if (err) {
       logger.error('Failed to read captions for edit:', err.message);
       return res.status(500).json({ success: false, error: 'Failed to read captions file' });
     }
-    
+
     // Parse and update the caption
+    // Format: timestamp\ttext\ttag
     const lines = data.split('\n').filter(line => line.trim());
     let updated = false;
     const updatedLines = lines.map(line => {
       const parts = line.split('\t');
       if (parts[0] === timestamp) {
         updated = true;
-        logger.info(`Caption edited: "${parts.slice(1).join('\t')}" → "${newText}"`);
-        return `${timestamp}\t${newText}`;
+        const oldText = parts.length >= 3 ? parts.slice(1, -1).join('\t') : parts.slice(1).join('\t');
+        const tag = parts.length >= 3 ? (parts[parts.length - 1] || '') : '';
+        logger.info(`Caption edited: "${oldText}" → "${newText}"`);
+        return tag ? `${timestamp}\t${newText}\t${tag}` : `${timestamp}\t${newText}\t`;
       }
       return line;
     });
-    
+
     if (!updated) {
       return res.status(404).json({ success: false, error: 'Caption not found' });
     }
-    
+
     // Write back to file
     const newContent = updatedLines.join('\n') + '\n';
     fs.writeFile(CAPTIONS_LOG_FILE, newContent, 'utf8', (err) => {
@@ -1823,14 +2040,171 @@ app.post('/transcript/edit', (req, res) => {
         logger.error('Failed to save edited caption:', err.message);
         return res.status(500).json({ success: false, error: 'Failed to save changes' });
       }
-      
+
       // Update in-memory history if present
       const memoryEntry = captionHistory.find(c => c.timestamp === timestamp);
       if (memoryEntry) {
         memoryEntry.text = newText;
       }
-      
+
+      // Update audience buffer if this caption is in it
+      const audienceEntry = audienceCaptionBuffer.find(c => c.timestamp === timestamp);
+      if (audienceEntry) {
+        audienceEntry.text = newText;
+
+        // Broadcast edit to all audience viewers
+        const editEvent = JSON.stringify({
+          text: newText,
+          timestamp: timestamp,
+          edited: true
+        });
+        audienceSSEClients.forEach(client => {
+          try {
+            client.write(`data: ${editEvent}\n\n`);
+          } catch (error) {
+            // Client disconnected
+          }
+        });
+      }
+
       res.json({ success: true, message: 'Caption updated successfully' });
+    });
+  });
+});
+
+/**
+ * Delete a caption from the transcript
+ */
+app.post('/transcript/delete', (req, res) => {
+  const { timestamp } = req.body;
+
+  if (!timestamp) {
+    return res.status(400).json({ success: false, error: 'Missing timestamp' });
+  }
+
+  // Read the captions file
+  fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
+    if (err) {
+      logger.error('Failed to read captions for delete:', err.message);
+      return res.status(500).json({ success: false, error: 'Failed to read captions file' });
+    }
+
+    // Parse and remove the caption
+    // Format: timestamp\ttext\ttag
+    const lines = data.split('\n').filter(line => line.trim());
+    let deleted = false;
+    let deletedText = '';
+    const updatedLines = lines.filter(line => {
+      const parts = line.split('\t');
+      if (parts[0] === timestamp) {
+        deleted = true;
+        deletedText = parts.length >= 3 ? parts.slice(1, -1).join('\t') : parts.slice(1).join('\t');
+        logger.info(`Caption deleted: "${deletedText}" (${timestamp})`);
+        return false; // Remove this line
+      }
+      return true; // Keep this line
+    });
+
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Caption not found' });
+    }
+
+    // Write back to file
+    const newContent = updatedLines.join('\n') + '\n';
+    fs.writeFile(CAPTIONS_LOG_FILE, newContent, 'utf8', (err) => {
+      if (err) {
+        logger.error('Failed to save after caption delete:', err.message);
+        return res.status(500).json({ success: false, error: 'Failed to save changes' });
+      }
+
+      // Remove from in-memory history if present
+      const memoryIndex = captionHistory.findIndex(c => c.timestamp === timestamp);
+      if (memoryIndex !== -1) {
+        captionHistory.splice(memoryIndex, 1);
+      }
+
+      // Remove from audience buffer if present and broadcast deletion
+      const audienceIndex = audienceCaptionBuffer.findIndex(c => c.timestamp === timestamp);
+      if (audienceIndex !== -1) {
+        audienceCaptionBuffer.splice(audienceIndex, 1);
+
+        // Broadcast delete event to all audience viewers
+        const deleteEvent = JSON.stringify({
+          type: 'delete',
+          timestamp: timestamp
+        });
+        audienceSSEClients.forEach(client => {
+          try {
+            client.write(`data: ${deleteEvent}\n\n`);
+          } catch (error) {
+            // Client disconnected
+          }
+        });
+      }
+
+      res.json({ success: true, message: 'Caption deleted successfully' });
+    });
+  });
+});
+
+/**
+ * Update caption tag endpoint
+ */
+app.post('/transcript/tag', (req, res) => {
+  const { timestamp, tag } = req.body;
+
+  if (!timestamp) {
+    return res.status(400).json({ success: false, error: 'Missing timestamp' });
+  }
+
+  // Validate tag
+  const validTags = ['prophecy', 'healing declaration', 'scripture', 'ignore', 'person call out', 'emphasis', 'POINT', ''];
+  if (tag && !validTags.includes(tag)) {
+    return res.status(400).json({ success: false, error: 'Invalid tag. Valid tags: prophecy, healing declaration, scripture, ignore, person call out, emphasis, POINT' });
+  }
+
+  // Read the captions file
+  fs.readFile(CAPTIONS_LOG_FILE, 'utf8', (err, data) => {
+    if (err) {
+      logger.error('Failed to read captions for tag update:', err.message);
+      return res.status(500).json({ success: false, error: 'Failed to read captions file' });
+    }
+
+    // Parse and update the caption tag
+    // Format: timestamp\ttext\ttag
+    const lines = data.split('\n').filter(line => line.trim());
+    let updated = false;
+    const updatedLines = lines.map(line => {
+      const parts = line.split('\t');
+      if (parts[0] === timestamp) {
+        updated = true;
+        const text = parts.length >= 3 ? parts.slice(1, -1).join('\t') : parts.slice(1).join('\t');
+        const newTag = tag || '';
+        logger.info(`Caption tagged: "${text}" → tag: "${newTag}"`);
+        return newTag ? `${timestamp}\t${text}\t${newTag}` : `${timestamp}\t${text}\t`;
+      }
+      return line;
+    });
+
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Caption not found' });
+    }
+
+    // Write back to file
+    const newContent = updatedLines.join('\n') + '\n';
+    fs.writeFile(CAPTIONS_LOG_FILE, newContent, 'utf8', (err) => {
+      if (err) {
+        logger.error('Failed to save tag update:', err.message);
+        return res.status(500).json({ success: false, error: 'Failed to save changes' });
+      }
+
+      // Update in-memory history if present
+      const memoryEntry = captionHistory.find(c => c.timestamp === timestamp);
+      if (memoryEntry) {
+        memoryEntry.tag = tag || '';
+      }
+
+      res.json({ success: true, message: 'Tag updated successfully' });
     });
   });
 });
@@ -1887,6 +2261,196 @@ app.get('/logs/stream', (req, res) => {
   });
 });
 
+// ===== AUDIENCE ENDPOINTS =====
+
+/**
+ * Audience page - public read-only caption viewer
+ * Mobile-first design for church members
+ * Access via: /audience (no token needed)
+ */
+app.get('/audience', (req, res) => {
+  // Serve audience.html (public access)
+  res.sendFile(path.join(__dirname, 'audience.html'));
+});
+
+/**
+ * SSE endpoint for audience live caption stream
+ * Sends last 6 captions to new connections, then streams updates
+ */
+app.get('/audience/stream', (req, res) => {
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  // Add client to set
+  audienceSSEClients.add(res);
+
+  console.log(`👥 Audience viewer connected (${audienceSSEClients.size} total)`);
+
+  // Send initial service status
+  res.write(`data: ${JSON.stringify(serviceStatus)}\n\n`);
+
+  // Only send captions if service is live/ready (not offline, starting_soon, paused, or ended)
+  const activeStatuses = ['ready', 'live'];
+  if (activeStatuses.includes(serviceStatus.status)) {
+    // Read last N captions from file (optimized for mobile - only send last 50)
+    const MAX_INITIAL_CAPTIONS = 50; // Limit initial load for mobile performance
+    try {
+      if (fs.existsSync(CAPTIONS_LOG_FILE)) {
+        const data = fs.readFileSync(CAPTIONS_LOG_FILE, 'utf8');
+        const lines = data.split('\n').filter(line => line.trim());
+
+        // Only process last N lines (much faster for large files)
+        const recentLines = lines.slice(-MAX_INITIAL_CAPTIONS);
+
+        // Parse captions - format: timestamp\ttext\ttag
+        // Tags are NOT sent to audience, only text
+        const recentCaptions = recentLines.map(line => {
+          const parts = line.split('\t');
+          if (parts.length >= 3) {
+            // Has tag: timestamp, text (may contain tabs), tag
+            return {
+              type: 'caption',
+              timestamp: parts[0],
+              text: parts.slice(1, -1).join('\t') // Text is everything except first (timestamp) and last (tag)
+            };
+          } else if (parts.length === 2) {
+            // No tag: timestamp, text
+            return {
+              type: 'caption',
+              timestamp: parts[0],
+              text: parts[1]
+            };
+          } else {
+            // Fallback
+            return {
+              type: 'caption',
+              timestamp: parts[0] || '',
+              text: parts.slice(1).join('\t')
+            };
+          }
+        });
+
+        // Send recent captions to new viewer (only last 50 for fast loading)
+        recentCaptions.forEach(caption => {
+          res.write(`data: ${JSON.stringify(caption)}\n\n`);
+        });
+
+        // Also update memory buffer to match what we sent (ensures consistency)
+        audienceCaptionBuffer = recentCaptions;
+      }
+    } catch (error) {
+      console.error('Error reading captions for audience:', error);
+    }
+  }
+
+  // Send initial heartbeat
+  res.write(': heartbeat\n\n');
+
+  // Keep connection alive with periodic heartbeats
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': heartbeat\n\n');
+    } catch (error) {
+      clearInterval(heartbeat);
+    }
+  }, 30000);
+
+  // Clean up on close
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    audienceSSEClients.delete(res);
+    console.log(`👥 Audience viewer disconnected (${audienceSSEClients.size} remaining)`);
+  });
+});
+
+/**
+ * Admin API: Get current audience URL
+ * Returns simple /audience URL (no token needed)
+ */
+app.get('/api/audience-token', (req, res) => {
+  const protocol = req.protocol;
+  const host = req.get('host');
+  const url = `${protocol}://${host}/audience`;
+
+  res.json({
+    url: url,
+    activeViewers: audienceSSEClients.size,
+    note: 'Token system removed - using simple /audience endpoint'
+  });
+});
+
+/**
+ * Admin API: Manually set audience status
+ * Allows admin to control what message audience sees
+ */
+app.post('/api/audience-status', (req, res) => {
+  const { status, message } = req.body;
+
+  if (!status || !message) {
+    return res.status(400).json({ success: false, error: 'Missing status or message' });
+  }
+
+  // Clear old captions when service is starting (fresh start for new service)
+  if (status === 'starting_soon') {
+    try {
+      fs.writeFileSync(CAPTIONS_LOG_FILE, '', 'utf8');
+      captionHistory.length = 0; // Clear in-memory history
+      audienceCaptionBuffer = []; // Clear audience buffer
+
+      // Broadcast clear event to all audience viewers
+      const clearEvent = JSON.stringify({ type: 'clear' });
+      audienceSSEClients.forEach(client => {
+        try {
+          client.write(`data: ${clearEvent}\n\n`);
+        } catch (error) {
+          // Client disconnected
+        }
+      });
+
+      console.log('🧹 Cleared old captions for new service');
+    } catch (error) {
+      console.error('Failed to clear captions:', error);
+    }
+  }
+
+  // Clear captions when service ends (not when paused)
+  if (status === 'ended') {
+    try {
+      // Clear in-memory buffers
+      captionHistory.length = 0;
+      audienceCaptionBuffer = [];
+
+      // Broadcast clear event to all audience viewers
+      const clearEvent = JSON.stringify({ type: 'clear' });
+      audienceSSEClients.forEach(client => {
+        try {
+          client.write(`data: ${clearEvent}\n\n`);
+        } catch (error) {
+          // Client disconnected
+        }
+      });
+
+      console.log('🧹 Cleared captions from audience (service ended)');
+    } catch (error) {
+      console.error('Failed to clear captions:', error);
+    }
+  }
+
+  // Update service status and broadcast to audience
+  broadcastServiceStatus(status, message);
+
+  console.log(`📢 Manual audience status set: ${status} - ${message}`);
+
+  res.json({
+    success: true,
+    status: status,
+    message: message
+  });
+});
+
+
 /**
  * Serve static files (if needed)
  */
@@ -1936,11 +2500,11 @@ wssClients.on('connection', (ws) => {
       ws.send(JSON.stringify({
         type: 'soniox_status',
         status: sonioxConnectionState,
-        message: sonioxConnectionState === 'connected' 
+        message: sonioxConnectionState === 'connected'
           ? `Connected: ${currentSonioxConfig.sourceLanguage} → ${currentSonioxConfig.targetLanguage}`
           : sonioxConnectionState === 'connecting'
-          ? 'Connecting...'
-          : 'Not connected'
+            ? 'Connecting...'
+            : 'Not connected'
       }));
     }
   }, 100);
@@ -1980,14 +2544,18 @@ wssClients.on('connection', (ws) => {
           return;
         }
       }
-      
+
       if (data.type === 'start_soniox') {
         // Client requesting to start Soniox connection
         const { apiKey, sourceLanguage, targetLanguage, youtubeCaptionUrl } = data;
         console.log(`🎬 Client requested to start Soniox connection: ${sourceLanguage} → ${targetLanguage}`);
-        
+
+        // Broadcast to audience that service is starting
+        broadcastServiceStatus('connecting', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
+
         // Validate inputs
         if (!apiKey || apiKey.trim().length === 0) {
+          broadcastServiceStatus('offline', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
           ws.send(JSON.stringify({
             type: 'soniox_status',
             status: 'error',
@@ -1995,7 +2563,7 @@ wssClients.on('connection', (ws) => {
           }));
           return;
         }
-        
+
         // Update YouTube publisher if URL provided
         if (youtubeCaptionUrl && youtubeCaptionUrl.trim().length > 0) {
           youtubePublisher = new YouTubeCaptionPublisher(youtubeCaptionUrl.trim(), YOUTUBE_CAPTIONS_LANGUAGE);
@@ -2008,7 +2576,7 @@ wssClients.on('connection', (ws) => {
           youtubePublisher = new YouTubeCaptionPublisher(null, YOUTUBE_CAPTIONS_LANGUAGE);
           console.log('📺 YouTube captions disabled (no URL provided)');
         }
-        
+
         // Close existing connection if any (properly clean up first)
         if (sonioxWs) {
           console.log('ℹ️ Closing existing Soniox connection to start new one');
@@ -2024,17 +2592,18 @@ wssClients.on('connection', (ws) => {
       } else if (data.type === 'stop_soniox') {
         // Client requesting to stop Soniox connection
         console.log('🛑 Client requested to stop Soniox connection');
+        broadcastServiceStatus('ended', 'Service has ended');
         shutdownSonioxConnection();
       } else if (data.type === 'get_soniox_status') {
         // Client requesting current Soniox status
         ws.send(JSON.stringify({
           type: 'soniox_status',
           status: sonioxConnectionState,
-          message: sonioxConnectionState === 'connected' 
+          message: sonioxConnectionState === 'connected'
             ? `Connected: ${currentSonioxConfig.sourceLanguage} → ${currentSonioxConfig.targetLanguage}`
             : sonioxConnectionState === 'connecting'
-            ? 'Connecting...'
-            : 'Not connected'
+              ? 'Connecting...'
+              : 'Not connected'
         }));
       } else if (data.type === 'audio') {
         // Forward audio data to Soniox with minimal delay
@@ -2052,12 +2621,12 @@ wssClients.on('connection', (ws) => {
             } else {
               audioData = Buffer.from(new Int16Array(data.data).buffer);
             }
-            
+
             // Only send if we have valid audio data
             if (audioData && audioData.length > 0) {
               sonioxWs.send(audioData, { binary: true });
               lastAudioSentTime = Date.now();
-              
+
               // Log occasionally for debugging (every ~100 chunks)
               if (Math.random() < 0.01) {
                 console.log(`📤 Sending audio chunk: ${audioData.length} bytes (configured: ${isSonioxConfigured})`);
@@ -2197,7 +2766,7 @@ function broadcastSonioxStatus(status, message = '') {
       }
     }
   });
-  
+
   if (sentCount === 0 && clientWebSockets.length > 0) {
     console.warn('⚠️ No clients received status update (all clients may be disconnected)');
   }
@@ -2208,25 +2777,25 @@ function broadcastSonioxStatus(status, message = '') {
  */
 function shutdownSonioxConnection() {
   console.log('🛑 Shutting down Soniox connection gracefully...');
-  
+
   // Set flags FIRST to prevent any race conditions
   manualDisconnect = true; // Mark as manual disconnect to prevent auto-reconnect
   isReconnecting = false; // Reset reconnecting flag
   isSonioxConfigured = false; // Reset config flag
   sonioxConnectionState = 'disconnected';
-  
+
   // Broadcast disconnected status immediately (before closing)
   broadcastSonioxStatus('disconnected', 'Connection stopped');
-  
+
   // Stop heartbeat
   stopHeartbeat();
-  
+
   // Clear reconnect timeout if any
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
   }
-  
+
   // Close WebSocket connection
   if (sonioxWs) {
     try {
@@ -2240,8 +2809,60 @@ function shutdownSonioxConnection() {
     // Clear the reference immediately
     sonioxWs = null;
   }
-  
+
   console.log('✅ Soniox connection shut down successfully');
+}
+
+/**
+ * Build Soniox context for improved transcription/translation accuracy
+ * Based on: https://soniox.com/docs/stt/concepts/context
+ *
+ * NOTE: Only uses fields supported by Soniox: general, text, terms, translation_terms.
+ */
+function buildSonioxContext() {
+  return {
+    general: [
+      { key: "domain", value: "Church / Christianity" },
+      { key: "topic", value: "Pastoral Sermon" },
+      { key: "setting", value: "Church worship service" },
+      { key: "speaker_role", value: "Pastor / Preacher" }
+    ],
+
+    text: `
+This content is a pastor delivering a Christian sermon during a church service.
+The speech includes Bible-based teaching, scripture references, exhortation,
+prayerful language, and pastoral instruction addressed to a congregation.
+
+The translation should sound natural to a church audience and reflect how
+pastors commonly speak when preaching from the Bible.
+`.trim(),
+
+    terms: [
+      // Core biblical & church vocabulary
+      "Amen", "Hallelujah", "Praise the Lord", "Worship", "Prayer",
+      "Scripture", "The Word", "Word of God", "The Gospel",
+      "Salvation", "Redemption", "Grace", "Mercy", "Faith", "Repentance",
+      "Anointing", "Covenant", "Blessing", "Obedience",
+
+      // Names & titles
+      "Jesus", "Jesus Christ", "Christ", "Lord", "God", "Father",
+      "Holy Spirit", "Savior", "Messiah",
+
+      // Sermon-specific language
+      "Brothers and sisters", "Church", "Congregation",
+      "Testimony", "Calling", "Ministry", "Preaching"
+    ],
+
+    translation_terms: [
+      // Preserve biblical terms exactly
+      { source: "Amen", target: "Amen" },
+      { source: "Hallelujah", target: "Hallelujah" },
+      { source: "Jesus Christ", target: "Jesus Christ" },
+      { source: "Holy Spirit", target: "Holy Spirit" },
+      { source: "Word of God", target: "Word of God" },
+      { source: "The Gospel", target: "The Gospel" }
+    ]
+  };
 }
 
 /**
@@ -2254,10 +2875,10 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
     sourceLanguage: sourceLanguage || currentSonioxConfig.sourceLanguage,
     targetLanguage: targetLanguage || currentSonioxConfig.targetLanguage
   };
-  
+
   // Update current config
   currentSonioxConfig = config;
-  
+
   // Validate API key
   if (!config.apiKey || config.apiKey.trim().length === 0) {
     console.error('❌ Cannot connect: No API key provided');
@@ -2265,12 +2886,12 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
     broadcastSonioxStatus('error', 'No API key provided');
     return;
   }
-  
+
   console.log('🔌 Connecting to Soniox...');
   console.log(`   API Key: ${config.apiKey.substring(0, 10)}... (${config.apiKey.length} chars)`);
   console.log(`   Source Language: ${config.sourceLanguage}`);
   console.log(`   Target Language: ${config.targetLanguage}`);
-  
+
   manualDisconnect = false; // Reset manual disconnect flag
   sonioxConnectionState = 'connecting';
   broadcastSonioxStatus('connecting', 'Establishing connection...');
@@ -2302,23 +2923,23 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       clearTimeout(connectionTimeout);
       connectionTimeout = null;
     }
-    
+
     console.log('✅ Connected to Soniox WebSocket');
     reconnectAttempts = 0;
     connectionStartTime = Date.now();
-    
+
     // Send configuration immediately (no delay for minimal latency)
     if (sonioxWs.readyState === WebSocket.OPEN) {
       // Build Soniox configuration
       const sonioxConfig = {
         api_key: config.apiKey,
-        model: 'stt-rt-v3',
+        model: process.env.SONIOX_MODEL || 'stt-rt-v5',
         endpoint_detection: true,
         audio_format: 's16le',
         sample_rate: 16000,
         num_channels: 1
       };
-      
+
       // Handle source language (auto-detect or specific language)
       if (config.sourceLanguage === 'auto') {
         // Auto-detect mode - don't specify language_hints
@@ -2327,7 +2948,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
         // Specific language
         sonioxConfig.language_hints = [config.sourceLanguage];
       }
-      
+
       // Add translation if source and target are different
       if (config.sourceLanguage !== config.targetLanguage && config.targetLanguage !== 'none') {
         sonioxConfig.translation = {
@@ -2339,12 +2960,16 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
         console.log('📝 Translation disabled (same language or target is "none")');
       }
 
+      // Add context for improved accuracy (church/sermon domain)
+      sonioxConfig.context = buildSonioxContext();
+      console.log('📚 Added context for church/sermon domain to improve transcription accuracy');
+
       try {
         sonioxWs.send(JSON.stringify(sonioxConfig));
         isSonioxConfigured = false; // Will be set true when we receive first tokens
         console.log('📤 Configuration sent to Soniox');
         console.log('📋 Config:', JSON.stringify(sonioxConfig, null, 2));
-        
+
         // Mark as connected immediately - Soniox buffers audio while processing config
         // This ensures audio isn't dropped and UI shows correct status
         sonioxConnectionState = 'connected';
@@ -2361,7 +2986,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
         return;
       }
     }
-    
+
     // Start heartbeat to keep connection alive
     startHeartbeat();
   });
@@ -2371,15 +2996,15 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
     if (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN) {
       return; // Ignore messages after connection closed
     }
-    
+
     try {
       // Soniox sends JSON messages
       const message = JSON.parse(data.toString());
-      
+
       // Reduced logging for performance (only log errors and occasional status)
       if (!sonioxWs._messageCount) sonioxWs._messageCount = 0;
       sonioxWs._messageCount++;
-      
+
       // Only log first message and occasional status updates
       if (sonioxWs._messageCount === 1) {
         console.log('📥 First message from Soniox received');
@@ -2387,7 +3012,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
         const uptime = connectionStartTime ? ((Date.now() - connectionStartTime) / 1000 / 60).toFixed(1) : 0;
         console.log(`📊 Processed ${sonioxWs._messageCount} messages (${uptime} min uptime)`);
       }
-      
+
       // Check for errors
       if (message.error_code || message.error_message) {
         console.error('❌ Soniox error:', message.error_message || message.error_code);
@@ -2398,7 +3023,8 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       if (!isSonioxConfigured && message.tokens !== undefined) {
         isSonioxConfigured = true;
         console.log('✅ Soniox configuration confirmed - receiving transcriptions');
-        // Don't broadcast status again - already marked as connected when config was sent
+        // Broadcast to audience that service is now live
+        broadcastServiceStatus('ready', 'Service is live - Translations appearing below');
       }
 
       // Process transcription results
@@ -2427,11 +3053,11 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
         } else if (Math.random() < 0.01) {
           console.log(`🔍 Received ${message.tokens.length} tokens from Soniox`);
         }
-        
+
         // Check if translation is disabled (source = target)
-        const isTranslationDisabled = currentSonioxConfig.sourceLanguage === currentSonioxConfig.targetLanguage || 
-                                     currentSonioxConfig.targetLanguage === 'none';
-        
+        const isTranslationDisabled = currentSonioxConfig.sourceLanguage === currentSonioxConfig.targetLanguage ||
+          currentSonioxConfig.targetLanguage === 'none';
+
         // Separate original and translated tokens
         // When source = target, tokens may not have translation_status - treat ALL tokens as original
         let originalTokens, translatedTokens;
@@ -2441,24 +3067,37 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
           translatedTokens = []; // No translations
         } else {
           // Translation enabled - filter by translation_status
-          originalTokens = message.tokens.filter(t => 
-            !t.translation_status || 
+          originalTokens = message.tokens.filter(t =>
+            !t.translation_status ||
             t.translation_status === 'original'
           );
-          translatedTokens = message.tokens.filter(t => 
-            t.translation_status === 'translation' || 
+          translatedTokens = message.tokens.filter(t =>
+            t.translation_status === 'translation' ||
             t.translation_status === 'translated'
           );
         }
-        
+
         // Combine ALL token texts (both partial and final) for live feel
         const originalText = originalTokens.map(t => t.text || '').join('').trim();
         const translatedText = translatedTokens.map(t => t.text || '').join('').trim();
-        
+
+        // Calculate average confidence scores for logging
+        const calculateAverageConfidence = (tokens) => {
+          const confidences = tokens
+            .map(t => t.confidence || t.conf || t.confidence_score)
+            .filter(c => c !== undefined && c !== null);
+          if (confidences.length === 0) return null;
+          const sum = confidences.reduce((a, b) => a + b, 0);
+          return (sum / confidences.length * 100).toFixed(1); // Convert to percentage
+        };
+
+        const originalConfidence = calculateAverageConfidence(originalTokens);
+        const translatedConfidence = calculateAverageConfidence(translatedTokens);
+
         // Check if we have final results
         const finalOriginalTokens = originalTokens.filter(t => t.is_final === true);
         const finalTranslatedTokens = translatedTokens.filter(t => t.is_final === true);
-        
+
         // Handle translation-only messages (translation comes separately)
         if (translatedTokens.length > 0 && originalTokens.length === 0) {
           // Send translated text (both partial and final for live feel)
@@ -2468,13 +3107,18 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
             if (sonioxWs._messageCount < 10 || isFinal) {
               console.log(`📝 ${isFinal ? 'Final' : 'Partial'} translation caption:`, translatedText);
             }
-            
+
             // Broadcast translated text immediately (live updates) - don't wait for final
             broadcastToCaptions(translatedText);
-            
-            // Send to YouTube (only final results)
+
+            // Send to YouTube and audience (only final results)
             if (isFinal) {
+              // Log with confidence score
+              if (translatedConfidence) {
+                logger.info(`📊 Translation confidence: ${translatedConfidence}% - "${translatedText.substring(0, 60)}${translatedText.length > 60 ? '...' : ''}"`);
+              }
               logCaption(translatedText, true); // Log final caption to history
+              broadcastToAudience(translatedText, true); // Send to audience viewers
               youtubePublisher.publish(translatedText).catch(err => {
                 // Error already logged in publish method
               });
@@ -2482,7 +3126,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
           }
           return; // Don't process further if this is translation-only
         }
-        
+
         // Handle original tokens (with or without translation in same message)
         if (originalTokens.length > 0) {
           // If we have translated text, send it (prefer translated over original)
@@ -2492,13 +3136,21 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
             if (sonioxWs._messageCount < 10 || (isFinal && Math.random() < 0.1)) {
               console.log(`📝 ${isFinal ? 'Final' : 'Partial'} caption:`, translatedText.substring(0, 50) + (translatedText.length > 50 ? '...' : ''));
             }
-            
+
             // Broadcast translated text immediately (live updates) - don't wait for final
             broadcastToCaptions(translatedText);
-            
-            // Send to YouTube (only final results)
+
+            // Send to YouTube and audience (only final results)
             if (isFinal) {
+              // Log with confidence scores
+              if (originalConfidence || translatedConfidence) {
+                const confInfo = [];
+                if (originalConfidence) confInfo.push(`Original: ${originalConfidence}%`);
+                if (translatedConfidence) confInfo.push(`Translation: ${translatedConfidence}%`);
+                logger.info(`📊 Confidence scores (${confInfo.join(', ')}) - "${translatedText.substring(0, 60)}${translatedText.length > 60 ? '...' : ''}"`);
+              }
               logCaption(translatedText, true); // Log final caption to history
+              broadcastToAudience(translatedText, true); // Send to audience viewers
               youtubePublisher.publish(translatedText).catch(err => {
                 // Error already logged in publish method
               });
@@ -2508,19 +3160,24 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
             // If translation is disabled (source = target), always send original
             // Otherwise, we wait for translation (don't send original source language)
             const isFinal = finalOriginalTokens.length > 0 && finalOriginalTokens.length === originalTokens.length;
-            
+
             if (isTranslationDisabled) {
               // Translation disabled - send original text immediately
               if (isFinal) {
                 console.log('📝 Final caption (no translation):', originalText);
               }
-              
+
               // Broadcast original text (live updates)
               broadcastToCaptions(originalText);
-              
-              // Log and send to YouTube (only final results)
+
+              // Log and send to YouTube and audience (only final results)
               if (isFinal) {
+                // Log with confidence score
+                if (originalConfidence) {
+                  logger.info(`📊 Transcription confidence: ${originalConfidence}% - "${originalText.substring(0, 60)}${originalText.length > 60 ? '...' : ''}"`);
+                }
                 logCaption(originalText, true);
+                broadcastToAudience(originalText, true); // Send to audience viewers
                 youtubePublisher.publish(originalText).catch(err => {
                   // Error already logged in publish method
                 });
@@ -2531,7 +3188,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
               if (isFinal) {
                 console.log('📝 Final original (waiting for translation):', originalText);
               }
-              
+
               // For now, we'll wait for translation (don't send original source language)
               // Uncomment below if you want to show original while waiting for translation:
               // captionClients.forEach(client => {
@@ -2562,7 +3219,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       clearTimeout(connectionTimeout);
       connectionTimeout = null;
     }
-    
+
     const errorMessage = error?.message || error?.toString() || 'Unknown error';
     console.error('❌ Soniox WebSocket error:', errorMessage);
     if (error?.code) {
@@ -2583,22 +3240,24 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
       clearTimeout(connectionTimeout);
       connectionTimeout = null;
     }
-    
+
     const sessionDuration = connectionStartTime ? ((Date.now() - connectionStartTime) / 1000 / 60).toFixed(1) : 0;
     console.log(`🔌 Soniox WebSocket closed: ${code} ${reason?.toString() || ''} (Session: ${sessionDuration} min)`);
     isSonioxConfigured = false;
     stopHeartbeat();
-    
+
     // Update connection state
     if (manualDisconnect) {
       sonioxConnectionState = 'disconnected';
       broadcastSonioxStatus('disconnected', 'Connection stopped by user');
+      broadcastServiceStatus('offline', 'Service has ended');
     } else {
       sonioxConnectionState = 'disconnected';
       const reasonStr = reason?.toString() || 'Unknown reason';
       broadcastSonioxStatus('disconnected', `Connection closed: ${reasonStr} (code: ${code})`);
+      broadcastServiceStatus('offline', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
     }
-    
+
     // Only reconnect if not a normal closure (1000) or going away (1001), and not a manual disconnect
     if (code !== 1000 && code !== 1001 && !manualDisconnect) {
       scheduleReconnect();
@@ -2620,17 +3279,17 @@ function scheduleReconnect() {
     }
     return;
   }
-  
+
   // Prevent multiple simultaneous reconnect attempts
   if (isReconnecting && reconnectTimeout) {
     return; // Already reconnecting
   }
-  
+
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
   }
-  
+
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.error('❌ Max reconnection attempts reached');
     sonioxConnectionState = 'error';
@@ -2638,15 +3297,15 @@ function scheduleReconnect() {
     isReconnecting = false;
     return;
   }
-  
+
   isReconnecting = true;
   reconnectAttempts++;
   const delay = Math.min(RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts - 1), 30000); // Max 30s delay
-  
-  console.log(`🔄 Reconnecting to Soniox in ${(delay/1000).toFixed(1)}s (attempt ${reconnectAttempts})...`);
+
+  console.log(`🔄 Reconnecting to Soniox in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts})...`);
   sonioxConnectionState = 'connecting';
   broadcastSonioxStatus('connecting', `Reconnecting... (attempt ${reconnectAttempts})`);
-  
+
   reconnectTimeout = setTimeout(() => {
     reconnectTimeout = null;
     isReconnecting = false;
@@ -2762,6 +3421,8 @@ server.listen(PORT, () => {
   console.log(`🌐 Open http://localhost:${PORT} in Resolume Browser Source`);
   console.log(`📊 Server logs: http://localhost:${PORT}/logs`);
   console.log(`📝 Caption transcript: http://localhost:${PORT}/transcript`);
+  console.log(`👥 Audience viewer: http://localhost:${PORT} (home page)`);
+  console.log(`🔧 Admin/Client page: http://localhost:${PORT}/client`);
   console.log(`⏱️  Optimized for long-running sessions (3+ hours)`);
 });
 

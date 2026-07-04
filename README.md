@@ -1,31 +1,87 @@
-# Resolume Live Subtitles
+# JGM Live Translation System
 
-A localhost web application that displays live translated subtitles for Resolume Arena. Captures microphone input, translates from Malayalam to English using Soniox, and displays the text on a transparent canvas suitable for Resolume Browser Source.
+A comprehensive live translation system for church services. Captures audio, translates in real-time, displays captions in Resolume, and provides a mobile-friendly viewer for congregation members.
 
 ## Features
 
 - 🎤 **Dual Audio Input**: Capture from microphone OR browser tab/system audio
-- 🌐 **Live Translation**: Real-time Malayalam → English translation via Soniox
+- 🌐 **Live Translation**: Real-time translation via Soniox (100+ languages)
 - 📺 **Resolume Ready**: Transparent HTML output perfect for Browser Source
+- 👥 **Audience Viewer**: Mobile-first page for congregation members to view translations
+- 🔗 **Shareable Links**: One-click copy, QR codes, and secure token system
+- ✏️ **Live Editing**: Edit captions on-the-fly, broadcasts to all viewers
 - 🎨 **Broadcast Safe**: Centered, bottom-aligned subtitles with proper styling
-- ⚡ **Real-time**: Only displays final captions (no partials)
+- ⚡ **Real-time**: Low-latency translation and caption delivery
 - 🔄 **Auto-reconnect**: Handles connection drops gracefully
 - 📊 **Live Logging**: Real-time server logs viewable in browser
-- 📝 **Transcript Export**: Save caption history as TXT, CSV, or JSON
+- 📝 **Transcript Export**: Save caption history as TXT, CSV, JSON, or SRT
 - ⏱️ **Real-time Updates**: SSE-based live streaming for logs and transcripts
+- 🔒 **Secure**: Token-based audience access, subdomain isolation
 
 ## Architecture
 
 ```
-Microphone → client.html → ws-server.js → Soniox WebSocket → ws-server.js → captions.html → Resolume
+┌─────────────┐
+│ Microphone  │
+│  or Tab     │
+└──────┬──────┘
+       │
+       v
+┌─────────────────┐
+│  client.html    │  ← Admin Control Panel
+│  (localhost/)   │
+└────────┬────────┘
+         │ WebSocket
+         v
+┌─────────────────┐
+│  ws-server.js   │  ← Node.js Server
+│                 │
+│  • Soniox API   │
+│  • SSE Streams  │
+│  • Token Mgmt   │
+└────┬───┬───┬────┘
+     │   │   │
+     │   │   └──────────────┐
+     │   │                  │
+     v   v                  v
+┌─────────┐  ┌──────────┐  ┌──────────────┐
+│captions │  │transcript│  │ audience.html│
+│  .html  │  │  .html   │  │ /audience/:  │
+│         │  │          │  │   token      │
+│Resolume │  │Edit View │  │              │
+│ Overlay │  │          │  │Mobile Viewer │
+└─────────┘  └──────────┘  └──────────────┘
 ```
 
-1. **client.html**: Captures microphone input, sends audio to server
-2. **ws-server.js**: WebSocket server that:
-   - Receives audio from client.html
-   - Connects to Soniox for STT + translation
-   - Forwards translated text to captions.html
-3. **captions.html**: Displays subtitles on transparent background (for Resolume)
+**Components:**
+
+1. **client.html** (`/`): Admin control panel
+   - Audio capture (mic or tab)
+   - Soniox connection controls
+   - Settings management
+   - Audience link generation
+
+2. **ws-server.js**: Backend server
+   - WebSocket for audio streaming
+   - Soniox API integration
+   - SSE for real-time updates
+   - Token-based audience access
+
+3. **captions.html** (`/captions`): Resolume overlay
+   - Transparent background
+   - Customizable styling
+   - Real-time caption display
+
+4. **transcript.html** (`/transcript`): Caption history
+   - Full session transcript
+   - Inline editing
+   - Export (TXT, CSV, JSON, SRT)
+
+5. **audience.html** (`/audience/:token`): Public viewer
+   - Mobile-first design
+   - Read-only access
+   - Shows last 6 captions
+   - Auto-updates via SSE
 
 ## Setup
 
@@ -111,15 +167,87 @@ The server will start on `http://localhost:8080`
 
 ## Usage
 
-### Step 1: Open Caption Display
+### Quick Start
 
-Open `http://localhost:8080` in a browser (or use this URL in Resolume Browser Source).
+1. **Start Server**: `npm start` or `docker-compose up -d`
+2. **Open Admin Panel**: http://localhost:8080
+3. **Configure Soniox**: Enter API key, select languages
+4. **Start Connection**: Click "Start Soniox Connection"
+5. **Share Audience Link**: Copy link or show QR code from settings panel
+6. **Add to Resolume**: Use http://localhost:8080/captions as Browser Source
 
-This will show the transparent subtitle display that Resolume will capture.
+### Detailed Usage
 
-### Step 2: Start Audio Input
+#### For Administrators:
 
-Open `http://localhost:8080/client.html` in a separate browser window/tab.
+**Step 1: Open Admin Control Panel**
+
+Open `http://localhost:8080` in your browser.
+
+This is your main control panel with:
+- Audio input controls
+- Live caption preview
+- Settings panel (right side)
+- Navigation to other pages
+
+**Step 2: Configure Soniox Connection**
+
+In the settings panel (right side):
+1. Enter your Soniox API key
+2. Select source language (e.g., Malayalam)
+3. Select target language (e.g., English)
+4. Click "Start Soniox Connection"
+5. Wait for green "Connected" status
+
+**Step 3: Start Audio Capture**
+
+Choose your audio source:
+- **Microphone**: Click "🎤 Start Microphone"
+- **Tab Audio**: Click "🖥️ Start Tab Audio" (for streaming audio)
+
+You should see:
+- Audio waveform moving
+- Captions appearing in real-time
+
+**Step 4: Share with Audience**
+
+In the "👥 Audience Link" section:
+1. Click "📋 Copy" to copy the link
+2. Or click "📱 Show QR Code" to display QR code
+3. Share via WhatsApp, SMS, or display QR on screen
+4. Monitor "Active viewers" count
+
+**Step 5: Setup Resolume Overlay**
+
+In Resolume Arena:
+1. Add a new layer
+2. Add "Browser Source" effect
+3. Enter URL: `http://localhost:8080/captions`
+4. Adjust position/size as needed
+
+#### For Audience Members:
+
+**Step 1: Get the Link**
+
+Receive the audience link from:
+- WhatsApp/SMS message
+- QR code scan
+- Printed handout
+
+**Step 2: Open on Phone/Tablet**
+
+1. Open the link in any browser
+2. Page will show "Live Translation"
+3. Status will change from "Connecting..." to "Live"
+
+**Step 3: View Translations**
+
+- Last 6 captions will be displayed
+- New captions appear automatically
+- Page auto-scrolls when at bottom
+- Works in portrait or landscape mode
+
+**No app installation required!**
 
 #### Option A: Microphone Mode
 1. Select "🎤 Microphone" from the Audio Source dropdown
@@ -146,7 +274,16 @@ Open `http://localhost:8080/client.html` in a separate browser window/tab.
 
 ### Additional Features
 
+#### Edit Captions On-the-Fly
+
+1. Open `http://localhost:8080/transcript` in a new tab
+2. Click the ✏️ edit button next to any caption
+3. Make your correction
+4. Click ✅ save
+5. **Edit broadcasts to all audience viewers automatically!**
+
 #### View Live Server Logs
+
 Open `http://localhost:8080/logs` to view:
 - Real-time server activity
 - Connection status
@@ -274,6 +411,41 @@ The subtitle display is optimized for broadcast:
 - The server handles reconnection automatically
 - Log files (`server.log`, `captions.log`) persist between restarts
 - Real-time updates use Server-Sent Events (SSE) - no polling required
+
+## Audience Viewer Deployment
+
+For production deployment with subdomains (e.g., `translate.yourchurch.com`), see:
+
+- **Quick Start**: `AUDIENCE_QUICK_START.md`
+- **Full Deployment Guide**: `AUDIENCE_DEPLOYMENT_GUIDE.md`
+- **Nginx Configuration**: `nginx-subdomain.conf`
+
+### Key Features:
+- ✅ Secure token-based access
+- ✅ Mobile-first responsive design
+- ✅ One-click link copying
+- ✅ QR code generation
+- ✅ Real-time viewer count
+- ✅ Live caption editing
+- ✅ Subdomain isolation
+
+### Quick Deploy:
+```bash
+# 1. Deploy with Docker
+docker-compose up -d --build
+
+# 2. Get audience token
+curl http://localhost:8080/api/audience-token
+
+# 3. Configure Nginx (see nginx-subdomain.conf)
+sudo cp nginx-subdomain.conf /etc/nginx/sites-available/jgm-captions
+# Edit file with your domain and token
+sudo ln -s /etc/nginx/sites-available/jgm-captions /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+# 4. Setup SSL
+sudo certbot --nginx -d admin.yourchurch.com -d translate.yourchurch.com
+```
 
 ## License
 

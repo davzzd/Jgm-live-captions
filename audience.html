@@ -1,0 +1,1382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Live Translation</title>
+  <style>
+    /* ===== PROFESSIONAL CHURCH AUDIENCE DESIGN ===== */
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    :root {
+      /* Professional color palette - warm, trustworthy, elegant */
+      --bg-primary: #0f1419;
+      --bg-secondary: #1a2332;
+      --bg-gradient: linear-gradient(135deg, #0f1419 0%, #1a2332 50%, #0f1419 100%);
+      --text-primary: #ffffff;
+      --text-secondary: #a8b4c8;
+      --text-muted: #6b7a95;
+      --accent: #5b8def;
+      --accent-hover: #7ba3f5;
+      --accent-glow: rgba(91, 141, 239, 0.15);
+      --caption-bg: rgba(26, 35, 50, 0.8);
+      --caption-border: rgba(91, 141, 239, 0.2);
+      --caption-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      
+      /* Typography - refined, readable */
+      --font-size-caption: 22px;
+      --font-size-time: 13px;
+      --font-size-title: 20px;
+      --line-height: 1.7;
+      --spacing: 20px;
+      --spacing-sm: 12px;
+      --spacing-lg: 32px;
+      
+      /* Border radius - modern, soft */
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      
+      /* Animations - smooth, professional */
+      --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-smooth: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    /* Light mode support */
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-primary: #f8f9fa;
+        --bg-secondary: #ffffff;
+        --bg-gradient: linear-gradient(135deg, #f8f9fa 0%, #ffffff 50%, #f8f9fa 100%);
+        --text-primary: #1a2332;
+        --text-secondary: #4a5568;
+        --text-muted: #718096;
+        --accent: #4c6ef5;
+        --accent-hover: #5c7cfa;
+        --accent-glow: rgba(76, 110, 245, 0.1);
+        --caption-bg: rgba(255, 255, 255, 0.9);
+        --caption-border: rgba(76, 110, 245, 0.15);
+        --caption-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      }
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 
+                   'Helvetica Neue', Arial, sans-serif;
+      background: #0a0e14;
+      background-image: 
+        radial-gradient(ellipse at top, rgba(91, 141, 239, 0.15) 0%, transparent 50%),
+        radial-gradient(ellipse at bottom, rgba(26, 35, 50, 0.3) 0%, transparent 50%),
+        linear-gradient(180deg, #0a0e14 0%, #0f1419 30%, #1a2332 70%, #0f1419 100%);
+      color: var(--text-primary);
+      line-height: var(--line-height);
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) 
+              env(safe-area-inset-bottom) env(safe-area-inset-left);
+      min-height: 100vh;
+      position: relative;
+    }
+    
+    /* Blurred background overlay for depth */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: 
+        radial-gradient(circle at 20% 30%, rgba(91, 141, 239, 0.08) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(26, 35, 50, 0.1) 0%, transparent 50%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    
+    /* ===== HEADER ===== */
+    
+    .header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: rgba(10, 14, 20, 0.75);
+      backdrop-filter: blur(30px) saturate(180%);
+      -webkit-backdrop-filter: blur(30px) saturate(180%);
+      padding: 16px var(--spacing-lg);
+      border-bottom: 1px solid rgba(91, 141, 239, 0.1);
+      z-index: 100;
+      box-shadow: 0 2px 20px rgba(0, 0, 0, 0.2);
+    }
+    
+    .header-content {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .title {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+    }
+    
+    .title-logo {
+      height: 32px;
+      width: auto;
+      object-fit: contain;
+      display: block;
+    }
+    
+    .title-icon {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent-glow);
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+    }
+    
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      padding: 6px 12px;
+      background: rgba(91, 141, 239, 0.1);
+      border-radius: 20px;
+      border: 1px solid var(--caption-border);
+    }
+    
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4caf50;
+      box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+      animation: pulse 2s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { 
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% { 
+        opacity: 0.7;
+        transform: scale(1.1);
+      }
+    }
+    
+    .status-dot.disconnected {
+      background: #ef5350;
+      box-shadow: 0 0 8px rgba(239, 83, 80, 0.5);
+      animation: none;
+    }
+    
+    /* ===== CAPTIONS CONTAINER - APPLE MUSIC STYLE ===== */
+    
+    .container {
+      max-width: 100%;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      position: relative;
+      z-index: 1;
+      padding-top: 70px; /* Account for fixed header */
+    }
+    
+    .captions-list {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      padding: 100px var(--spacing) 120px;
+      gap: 0;
+      position: relative;
+    }
+    
+    .caption-item {
+      width: 100%;
+      max-width: 1200px;
+      text-align: left;
+      padding: 20px var(--spacing);
+      margin: 0;
+      position: relative;
+      transition: color 0.2s ease;
+      pointer-events: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    
+    /* Focused line (center of viewport or last 2 when at bottom) */
+    .caption-item.focused {
+      pointer-events: auto;
+    }
+    
+    /* New caption animation - simple fade */
+    .caption-item.new {
+      animation: fadeIn 0.3s ease;
+    }
+    
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+    
+    .caption-time {
+      position: absolute;
+      top: 8px;
+      right: var(--spacing);
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.35);
+      font-weight: 500;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      pointer-events: none;
+      z-index: 1;
+    }
+    
+    .caption-item.focused .caption-time {
+      color: rgba(255, 255, 255, 0.55);
+    }
+    
+    .caption-item.far .caption-time {
+      opacity: 0.2;
+    }
+    
+    .caption-text {
+      font-size: 20px;
+      color: #ffffff;
+      word-wrap: break-word;
+      word-break: normal;
+      line-height: 1.5;
+      font-weight: 500;
+      letter-spacing: -0.2px;
+      text-shadow: 0 2px 20px rgba(0, 0, 0, 0.3);
+      transition: color 0.2s ease;
+      max-width: 100%;
+    }
+    
+    /* Focused line styling */
+    .caption-item.focused .caption-text {
+      color: #ffffff;
+    }
+    
+    /* Above focused - slightly grey */
+    .caption-item.above-focused .caption-text {
+      color: rgba(255, 255, 255, 0.6);
+    }
+    
+    /* Below focused - slightly grey */
+    .caption-item.below-focused .caption-text {
+      color: rgba(255, 255, 255, 0.6);
+    }
+    
+    /* Far lines - more grey */
+    .caption-item.far .caption-text {
+      color: rgba(255, 255, 255, 0.5);
+    }
+    
+    /* ===== EMPTY STATE ===== */
+    
+    .empty-state {
+      text-align: center;
+      padding: 80px var(--spacing);
+      color: var(--text-secondary);
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    
+    .empty-state-icon {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto var(--spacing-lg);
+      opacity: 0.7;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .empty-state-icon svg {
+      width: 100%;
+      height: 100%;
+      stroke-width: 1.5;
+    }
+    
+    .empty-state-text {
+      font-size: 18px;
+      line-height: 1.8;
+      color: var(--text-secondary);
+    }
+    
+    .empty-state-text strong {
+      display: block;
+      font-size: 22px;
+      color: var(--text-primary);
+      margin-bottom: var(--spacing-sm);
+      font-weight: 600;
+    }
+    
+    .empty-state-text span {
+      font-size: 16px;
+      line-height: 1.8;
+      color: rgba(255, 255, 255, 0.85);
+      font-weight: 500;
+    }
+    
+    /* ===== LOADING STATE ===== */
+    
+    .loading {
+      text-align: center;
+      padding: 80px var(--spacing);
+      color: var(--text-secondary);
+    }
+    
+    .loading-spinner {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto var(--spacing-lg);
+      border: 3px solid var(--caption-border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    .loading-text {
+      font-size: 16px;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    /* ===== TABLET OPTIMIZATIONS ===== */
+    
+    @media (min-width: 768px) {
+      .title-logo {
+        height: 36px;
+      }
+      
+      .caption-text {
+        font-size: 22px;
+      }
+      
+      .caption-item {
+        max-width: 1400px;
+      }
+      
+      .caption-time {
+        font-size: 11px;
+        top: 10px;
+        right: var(--spacing-lg);
+      }
+      
+      .captions-list {
+        padding: 140px var(--spacing-lg) 240px;
+      }
+    }
+    
+    /* ===== DESKTOP OPTIMIZATIONS ===== */
+    
+    @media (min-width: 1024px) {
+      .title-logo {
+        height: 40px;
+      }
+      .caption-text {
+        font-size: 24px;
+      }
+      
+      .caption-item {
+        max-width: 1600px;
+      }
+      
+      .caption-time {
+        font-size: 12px;
+        top: 12px;
+        right: var(--spacing-lg);
+      }
+      
+      .captions-list {
+        padding: 160px var(--spacing-lg) 280px;
+      }
+    }
+    
+    /* ===== MOBILE OPTIMIZATIONS ===== */
+    
+    @media (max-width: 480px) {
+      .caption-item {
+        padding: 16px 12px;
+        max-width: 100%;
+      }
+      
+      .caption-text {
+        font-size: 18px;
+      }
+      
+      .caption-time {
+        font-size: 9px;
+        top: 6px;
+        right: var(--spacing);
+      }
+      
+      .empty-state-text {
+        font-size: 16px;
+      }
+      
+      .empty-state-text strong {
+        font-size: 18px;
+      }
+      
+      .empty-state-text span {
+        font-size: 15px;
+      }
+      
+      .loading-disclaimer {
+        font-size: 15px !important;
+        max-width: 90% !important;
+      }
+    }
+    
+    /* ===== ACCESSIBILITY ===== */
+    
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+    
+    /* High contrast mode support */
+    @media (prefers-contrast: high) {
+      .caption-item {
+        border-width: 2px;
+      }
+    }
+    
+    /* ===== OFFLINE INDICATOR ===== */
+    
+    .offline-banner {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(135deg, #ef5350 0%, #e53935 100%);
+      color: white;
+      padding: 16px var(--spacing);
+      text-align: center;
+      font-size: 14px;
+      font-weight: 500;
+      transform: translateY(100%);
+      transition: transform var(--transition-smooth);
+      z-index: 200;
+      box-shadow: 0 -4px 20px rgba(239, 83, 80, 0.3);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    
+    .offline-banner.show {
+      transform: translateY(0);
+    }
+    
+    /* ===== SCROLL TO BOTTOM BUTTON ===== */
+    
+    .scroll-bottom {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 52px;
+      height: 52px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      font-size: 20px;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(91, 141, 239, 0.4);
+      opacity: 0;
+      transform: scale(0.8) translateY(10px);
+      transition: all var(--transition-smooth);
+      z-index: 150;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+    }
+    
+    .scroll-bottom.show {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+    
+    .scroll-bottom:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 6px 24px rgba(91, 141, 239, 0.5);
+      transform: scale(1.05) translateY(-2px);
+    }
+    
+    .scroll-bottom:active {
+      transform: scale(0.95) translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-content">
+      <div class="title">
+        <img src="/Logo.png" alt="JGM Live Translation" class="title-logo">
+      </div>
+      <div class="status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="container">
+    <div id="loadingState" class="loading">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Connecting to live stream...</div>
+      <div class="loading-disclaimer" style="margin-top: 30px; font-size: 16px; color: rgba(255, 255, 255, 0.8); line-height: 1.8; max-width: 600px; margin-left: auto; margin-right: auto; font-weight: 500;">
+        This translation service is only for the audience present in the church and not for online viewers.<br><br>
+        Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.
+      </div>
+    </div>
+    
+    <!-- Service Status Banner -->
+    <div id="serviceStatus" class="empty-state" style="display: none;">
+      <div class="empty-state-icon" id="serviceStatusIcon">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </div>
+      <div class="empty-state-text">
+        <strong id="serviceStatusTitle">Service Status</strong><br>
+        <span id="serviceStatusMessage">Checking status...</span>
+      </div>
+    </div>
+    
+    <div id="captionsList" class="captions-list" style="display: none;"></div>
+  </main>
+
+  <!-- Offline Banner -->
+  <div id="offlineBanner" class="offline-banner">
+    ⚠️ Connection lost. Reconnecting...
+  </div>
+
+  <!-- Scroll to Bottom Button -->
+  <button id="scrollBottom" class="scroll-bottom" aria-label="Scroll to bottom">↓</button>
+
+  <script>
+    // ===== CONFIGURATION =====
+    const AUTO_SCROLL_THRESHOLD = 100; // px from bottom to auto-scroll
+    const MAX_CAPTIONS = 50; // Maximum number of captions to keep in memory/DOM (sliding window) - optimized for mobile
+    
+    // ===== STATE =====
+    let captions = [];
+    let eventSource = null;
+    let reconnectAttempts = 0;
+    let isAtBottom = true;
+    let isUserScrolling = false;
+    let scrollTimeout = null;
+    let autoScrollTimeout = null; // Debounced auto-scroll timeout
+    let lastScrollTop = 0;
+    let lastMessageTime = Date.now(); // Track last message received
+    let healthCheckInterval = null; // Connection health monitoring
+    
+    // ===== DOM ELEMENTS =====
+    const captionsList = document.getElementById('captionsList');
+    const loadingState = document.getElementById('loadingState');
+    const serviceStatus = document.getElementById('serviceStatus');
+    const serviceStatusIcon = document.getElementById('serviceStatusIcon');
+    const serviceStatusTitle = document.getElementById('serviceStatusTitle');
+    const serviceStatusMessage = document.getElementById('serviceStatusMessage');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const offlineBanner = document.getElementById('offlineBanner');
+    const scrollBottomBtn = document.getElementById('scrollBottom');
+    
+    // ===== SERVICE STATUS =====
+    let currentServiceStatus = 'offline';
+    
+    // ===== UTILITY FUNCTIONS =====
+    
+    function formatTime(isoString) {
+      const date = new Date(isoString);
+      return date.toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: true 
+      });
+    }
+    
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    function checkScrollPosition() {
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollHeight = document.documentElement.scrollHeight;
+      const clientHeight = document.documentElement.clientHeight;
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+      
+      // Detect if this is a user scroll (not programmatic)
+      const scrollDelta = scrollTop - lastScrollTop;
+      const absDelta = Math.abs(scrollDelta);
+      
+      // Only detect as user scrolling if:
+      // 1. Scroll delta is significant (> 10px to avoid false positives from auto-scroll)
+      // 2. User scrolled UP (not down, which could be auto-scroll)
+      // 3. Not already at bottom (auto-scroll only happens when at bottom)
+      const isScrollingUp = scrollDelta < -10;
+      const isScrollingDown = scrollDelta > 10;
+      const wasAtBottom = isAtBottom;
+      const nowAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
+      
+      // User manually scrolled UP from bottom - disable auto-scroll
+      if (wasAtBottom && !nowAtBottom && isScrollingUp && absDelta > 10) {
+        isUserScrolling = true;
+        isAtBottom = false;
+        // Clear any pending auto-scroll
+        if (autoScrollTimeout) {
+          clearTimeout(autoScrollTimeout);
+          autoScrollTimeout = null;
+        }
+      } else if (nowAtBottom) {
+        // At bottom - always enable auto-scroll unless user explicitly scrolled up
+        if (!(wasAtBottom && !nowAtBottom && isScrollingUp)) {
+          isAtBottom = true;
+          // If user scrolled back to bottom, reset user scrolling flag
+          if (!wasAtBottom && nowAtBottom && isUserScrolling) {
+            isUserScrolling = false;
+          }
+        }
+      }
+      
+      // Update lastScrollTop
+      lastScrollTop = scrollTop;
+      
+      // Clear/reset user scrolling timeout
+      if (scrollTimeout) {
+        clearTimeout(scrollTimeout);
+      }
+      if (isUserScrolling) {
+        scrollTimeout = setTimeout(() => {
+          // Only reset if still at bottom (user might have scrolled back)
+          if (isAtBottom) {
+            isUserScrolling = false;
+          }
+        }, 200);
+      }
+      
+      // Show/hide scroll to bottom button (show when NOT at bottom)
+      if (!isAtBottom) {
+        scrollBottomBtn.classList.add('show');
+      } else {
+        scrollBottomBtn.classList.remove('show');
+      }
+      
+      // Update focus classes on scroll for blur effect
+      updateFocusClasses();
+    }
+    
+    function scrollToBottom(smooth = true) {
+      // Mark as programmatic scroll (not user-initiated)
+      // Don't set isUserScrolling to false here - let checkScrollPosition handle it
+      
+      const targetScroll = document.documentElement.scrollHeight;
+      
+      window.scrollTo({
+        top: targetScroll,
+        behavior: smooth ? 'smooth' : 'auto'
+      });
+      
+      // Immediately update isAtBottom for smooth scrolling
+      // This ensures rapid updates don't miss the bottom state
+      isAtBottom = true;
+      lastScrollTop = targetScroll;
+      
+      // Verify after scroll completes
+      setTimeout(() => {
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollHeight = document.documentElement.scrollHeight;
+        const clientHeight = document.documentElement.clientHeight;
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+        isAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
+        lastScrollTop = scrollTop;
+      }, smooth ? 300 : 50);
+    }
+    
+    // ===== CAPTION RENDERING =====
+    
+    function updateServiceStatus(status, message) {
+      const previousStatus = currentServiceStatus;
+      currentServiceStatus = status;
+      
+      // Don't clear captions on pause - they should remain visible
+      
+      const statusConfig = {
+        'offline': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>', 
+          title: 'Service Not Started', 
+          color: '#ef5350' 
+        },
+        'connecting': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>', 
+          title: 'Connecting...', 
+          color: '#ff9800' 
+        },
+        'ready': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', 
+          title: 'Service is Live', 
+          color: '#4caf50' 
+        },
+        'paused': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>', 
+          title: 'Service Paused', 
+          color: '#ff9800' 
+        },
+        'ended': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>', 
+          title: 'Service Ended', 
+          color: '#9e9e9e' 
+        },
+        'starting_soon': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', 
+          title: 'Starting Soon', 
+          color: '#ffc107' 
+        },
+        'live': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', 
+          title: 'Service is Live', 
+          color: '#4caf50' 
+        },
+        'custom': { 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>', 
+          title: 'Service Update', 
+          color: '#5b8def' 
+        }
+      };
+      
+      const config = statusConfig[status] || statusConfig['offline'];
+      
+      // Default disclaimer message for pre-translation states
+      const disclaimerMessage = 'This translation service is only for the audience present in the church and not for online viewers.<br><br>Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
+      
+      // Use custom message if provided, otherwise use default or disclaimer
+      let displayMessage = message;
+      let useHTML = false;
+      if (!message || message === 'Service has not started yet' || message === 'Connecting...' || message.includes('Starting Soon')) {
+        // For pre-translation states, show disclaimer
+        const preTranslationStates = ['offline', 'connecting', 'starting_soon'];
+        if (preTranslationStates.includes(status)) {
+          displayMessage = disclaimerMessage;
+          useHTML = true;
+        }
+      }
+      
+      serviceStatusIcon.innerHTML = config.icon;
+      serviceStatusTitle.textContent = config.title;
+      if (useHTML) {
+        serviceStatusMessage.innerHTML = displayMessage;
+      } else {
+        serviceStatusMessage.textContent = displayMessage;
+      }
+      serviceStatusIcon.style.color = config.color;
+      
+      // Control visibility based on status
+      // Hide captions only when service is offline, ended, or starting_soon (NOT paused)
+      const hideCaptionStatuses = ['offline', 'ended', 'starting_soon'];
+      
+      if (hideCaptionStatuses.includes(status)) {
+        // Service not active - show status message, hide captions
+        serviceStatus.style.display = 'block';
+        captionsList.style.display = 'none';
+        loadingState.style.display = 'none';
+      } else if (status === 'paused') {
+        // Paused - show captions (don't clear them), but show status message too
+        serviceStatus.style.display = 'block';
+        if (captions.length > 0) {
+          captionsList.style.display = 'flex';
+        } else {
+          captionsList.style.display = 'none';
+        }
+        loadingState.style.display = 'none';
+      } else if (status === 'ready' || status === 'live') {
+        // Service is live - always show captions list (captions will arrive via SSE)
+        // Don't wait for captions.length > 0 because they're sent after status
+        serviceStatus.style.display = 'none';
+        captionsList.style.display = 'flex';
+        loadingState.style.display = 'none';
+        
+        // If captions already exist, render them
+        if (captions.length > 0) {
+          requestAnimationFrame(() => {
+            renderCaptions(captionsList.children.length === 0);
+          });
+        }
+      }
+    }
+    
+    function updateFocusClasses() {
+      if (captions.length === 0 || !captionsList.querySelectorAll('.caption-item').length) return;
+      
+      const items = Array.from(captionsList.querySelectorAll('.caption-item'));
+      const totalItems = items.length;
+      
+      // Check if user is at bottom
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollHeight = document.documentElement.scrollHeight;
+      const clientHeight = document.documentElement.clientHeight;
+      const atBottom = (scrollHeight - scrollTop - clientHeight) < AUTO_SCROLL_THRESHOLD;
+      
+      items.forEach((item, index) => {
+        // Remove all focus classes
+        item.classList.remove('focused', 'above-focused', 'below-focused', 'far');
+        
+        if (atBottom) {
+          // When at bottom: last 2 lines are in focus
+          const distanceFromEnd = totalItems - 1 - index;
+          
+          if (distanceFromEnd === 0) {
+            // Last line - fully focused
+            item.classList.add('focused');
+          } else if (distanceFromEnd === 1) {
+            // Second to last - also focused
+            item.classList.add('focused');
+          } else if (distanceFromEnd === 2) {
+            // Third from last - slightly blurred
+            item.classList.add('above-focused');
+          } else if (distanceFromEnd <= 4) {
+            // Close to end - more blurred
+            item.classList.add('below-focused');
+          } else {
+            // Far from end - heavily blurred
+            item.classList.add('far');
+          }
+        } else {
+          // When scrolled up: use lower viewport focus (75% from top, much closer to bottom)
+          const viewportFocusPoint = window.innerHeight * 0.75;
+          const rect = item.getBoundingClientRect();
+          const itemCenter = rect.top + rect.height / 2;
+          const distance = Math.abs(itemCenter - viewportFocusPoint);
+          
+          if (distance < 120) {
+            // Very close to focus point - fully focused
+            item.classList.add('focused');
+          } else if (distance < 280) {
+            // Close to focus point - slightly blurred
+            if (itemCenter < viewportFocusPoint) {
+              item.classList.add('above-focused');
+            } else {
+              item.classList.add('below-focused');
+            }
+          } else {
+            // Far from focus point - heavily blurred
+            item.classList.add('far');
+          }
+        }
+      });
+    }
+    
+    // Track rendered captions to avoid re-rendering
+    let renderedCaptions = new Set();
+    
+    // ===== SLIDING WINDOW MANAGEMENT =====
+    
+    function removeOldCaptions() {
+      // Remove oldest captions if we exceed the limit
+      if (captions.length > MAX_CAPTIONS) {
+        const removeCount = captions.length - MAX_CAPTIONS;
+        const removedCaptions = captions.splice(0, removeCount);
+        
+        // Batch DOM removal for better performance
+        const elementsToRemove = [];
+        
+        removedCaptions.forEach(caption => {
+          const element = captionsList.querySelector(`[data-timestamp="${caption.timestamp}"]`);
+          if (element) {
+            elementsToRemove.push(element);
+            renderedCaptions.delete(caption.timestamp);
+          }
+        });
+        
+        // Remove all elements at once (more efficient than individual removes)
+        elementsToRemove.forEach(element => element.remove());
+        
+        // Update data-index attributes for remaining elements (only if we removed any)
+        if (elementsToRemove.length > 0) {
+          const remainingElements = captionsList.querySelectorAll('.caption-item');
+          remainingElements.forEach((element, index) => {
+            element.setAttribute('data-index', index);
+          });
+        }
+      }
+    }
+    
+    function renderCaptions(forceFullRender = false) {
+      // Don't show captions if service is offline, ended, or starting_soon
+      // But DO show captions if paused (they should remain visible)
+      const hideCaptionStatuses = ['offline', 'ended', 'starting_soon'];
+      
+      if (hideCaptionStatuses.includes(currentServiceStatus)) {
+        captionsList.style.display = 'none';
+        serviceStatus.style.display = 'block';
+        loadingState.style.display = 'none';
+        renderedCaptions.clear();
+        return;
+      }
+      
+      // If paused but captions exist, show them
+      if (currentServiceStatus === 'paused' && captions.length === 0) {
+        captionsList.style.display = 'none';
+        serviceStatus.style.display = 'block';
+        loadingState.style.display = 'none';
+        return;
+      }
+      
+      if (captions.length === 0) {
+        captionsList.style.display = 'none';
+        serviceStatus.style.display = 'block';
+        loadingState.style.display = 'none';
+        renderedCaptions.clear();
+        return;
+      }
+      
+      loadingState.style.display = 'none';
+      serviceStatus.style.display = 'none';
+      captionsList.style.display = 'flex';
+      
+      // Apply sliding window before rendering
+      removeOldCaptions();
+      
+      // Only do full render if forced (initial load, clear, etc.)
+      if (forceFullRender || captionsList.children.length === 0) {
+        captionsList.innerHTML = captions.map((caption, index) => `
+          <div class="caption-item ${caption.isNew ? 'new' : ''}" 
+               data-timestamp="${caption.timestamp}"
+               data-index="${index}">
+            <div class="caption-time">${formatTime(caption.timestamp)}</div>
+            <div class="caption-text">${escapeHtml(caption.text)}</div>
+          </div>
+        `).join('');
+        renderedCaptions = new Set(captions.map(c => c.timestamp));
+      }
+      
+      // Update focus classes after render
+      requestAnimationFrame(() => {
+        updateFocusClasses();
+        // Remove 'new' class after animation
+        captions.forEach(c => c.isNew = false);
+      });
+    }
+    
+    function addCaption(caption) {
+      // Check if caption already exists (avoid duplicates)
+      const existingIndex = captions.findIndex(c => c.timestamp === caption.timestamp);
+      
+      if (existingIndex !== -1) {
+        // Update existing caption (edit) - update DOM directly, no re-render
+        captions[existingIndex].text = caption.text;
+        captions[existingIndex].edited = caption.edited || false;
+        
+        // Find and update existing DOM element
+        const existingElement = captionsList.querySelector(`[data-timestamp="${caption.timestamp}"]`);
+        if (existingElement) {
+          const textElement = existingElement.querySelector('.caption-text');
+          if (textElement && textElement.textContent !== caption.text) {
+            textElement.textContent = caption.text;
+            // Brief highlight animation
+            existingElement.classList.add('edited');
+            setTimeout(() => existingElement.classList.remove('edited'), 600);
+          }
+        } else {
+          // Element not found, do full render
+          renderCaptions(true);
+        }
+      } else {
+        // Add new caption - append to DOM directly, no re-render
+        caption.isNew = true;
+        captions.push(caption);
+        
+        // Apply sliding window: remove old captions if we exceed limit
+        removeOldCaptions();
+        
+        // Create and append new element
+        const newElement = document.createElement('div');
+        newElement.className = 'caption-item new';
+        newElement.setAttribute('data-timestamp', caption.timestamp);
+        newElement.setAttribute('data-index', captions.length - 1);
+        
+        const timeElement = document.createElement('div');
+        timeElement.className = 'caption-time';
+        timeElement.textContent = formatTime(caption.timestamp);
+        newElement.appendChild(timeElement);
+        
+        const textElement = document.createElement('div');
+        textElement.className = 'caption-text';
+        textElement.textContent = caption.text;
+        newElement.appendChild(textElement);
+        
+        captionsList.appendChild(newElement);
+        renderedCaptions.add(caption.timestamp);
+        
+        // Remove 'new' class after animation
+        setTimeout(() => {
+          newElement.classList.remove('new');
+          caption.isNew = false;
+        }, 800);
+      }
+      
+      // Update focus classes (lightweight operation)
+      requestAnimationFrame(() => {
+        updateFocusClasses();
+      });
+      
+      // Auto-scroll if user is at bottom (only if not manually scrolling)
+      // Use debounced approach to handle rapid updates
+      if (isAtBottom && !isUserScrolling) {
+        // Clear any pending auto-scroll to batch rapid updates
+        if (autoScrollTimeout) {
+          clearTimeout(autoScrollTimeout);
+        }
+        
+        // Schedule auto-scroll with minimal delay to batch rapid updates
+        autoScrollTimeout = setTimeout(() => {
+          // Double-check user hasn't scrolled during the delay
+          if (isUserScrolling) {
+            return; // User scrolled, don't auto-scroll
+          }
+          
+          // Always scroll to bottom when at bottom (aggressive auto-scroll)
+          // Use requestAnimationFrame for smooth, immediate scrolling
+          requestAnimationFrame(() => {
+            // Final check before scrolling
+            if (!isUserScrolling) {
+              scrollToBottom(true);
+              // Update focus after scroll completes
+              setTimeout(updateFocusClasses, 100);
+            }
+          });
+        }, 5); // Very short delay (5ms) to batch rapid updates but still be responsive
+      }
+    }
+    
+    function deleteCaption(timestamp) {
+      // Remove caption from array
+      const index = captions.findIndex(c => c.timestamp === timestamp);
+      if (index !== -1) {
+        captions.splice(index, 1);
+        
+        // Remove from DOM directly
+        const element = captionsList.querySelector(`[data-timestamp="${timestamp}"]`);
+        if (element) {
+          // Fade out animation
+          element.style.opacity = '0';
+          element.style.transform = 'translateY(-20px) scale(0.95)';
+          element.style.filter = 'blur(10px)';
+          
+          setTimeout(() => {
+            element.remove();
+            renderedCaptions.delete(timestamp);
+            // Update focus after removal
+            updateFocusClasses();
+          }, 400);
+        } else {
+          // Element not found, do full render
+          renderCaptions(true);
+        }
+      }
+    }
+    
+    // ===== CONNECTION MANAGEMENT =====
+    
+    function updateStatus(connected) {
+      if (connected) {
+        statusDot.classList.remove('disconnected');
+        statusText.textContent = 'Live';
+        offlineBanner.classList.remove('show');
+        reconnectAttempts = 0;
+      } else {
+        statusDot.classList.add('disconnected');
+        statusText.textContent = 'Offline';
+        offlineBanner.classList.add('show');
+      }
+    }
+    
+    function startConnectionHealthCheck() {
+      // Stop any existing health check
+      stopConnectionHealthCheck();
+      
+      // Check connection health every 5 seconds
+      healthCheckInterval = setInterval(() => {
+        if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+          // Connection not open, health check not needed
+          return;
+        }
+        
+        const timeSinceLastMessage = Date.now() - lastMessageTime;
+        
+        // If no messages for 30+ seconds, connection is likely stale
+        if (timeSinceLastMessage > 30000) {
+          console.warn('Connection health check: No messages for 30+ seconds, reconnecting...');
+          // Reconnect to get fresh connection
+          reconnectAttempts = 0; // Reset attempts for health check reconnect
+          connect();
+        }
+      }, 5000); // Check every 5 seconds
+    }
+    
+    function stopConnectionHealthCheck() {
+      if (healthCheckInterval) {
+        clearInterval(healthCheckInterval);
+        healthCheckInterval = null;
+      }
+    }
+    
+    function connect() {
+      // Stop health check during reconnection
+      stopConnectionHealthCheck();
+      
+      // Close existing connection properly
+      if (eventSource) {
+        try {
+          eventSource.close();
+        } catch (e) {
+          // Ignore errors when closing
+        }
+        eventSource = null;
+      }
+      
+      // Create new SSE connection (no token needed)
+      const streamUrl = `/audience/stream`;
+      eventSource = new EventSource(streamUrl);
+      
+      eventSource.onopen = () => {
+        console.log('Connected to live stream');
+        updateStatus(true);
+        lastMessageTime = Date.now(); // Reset timestamp on connection
+        reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+        startConnectionHealthCheck(); // Start monitoring connection health
+      };
+      
+      eventSource.onmessage = (event) => {
+        // Update last message timestamp on every message
+        lastMessageTime = Date.now();
+        
+        try {
+          const data = JSON.parse(event.data);
+          
+          // Handle different message types
+          if (data.type === 'status') {
+            // Service status update
+            updateServiceStatus(data.status, data.message);
+          } else if (data.type === 'clear') {
+            // Clear all captions
+            captions = [];
+            renderedCaptions.clear();
+            captionsList.innerHTML = '';
+            renderCaptions(true);
+          } else if (data.type === 'delete') {
+            // Caption deletion
+            deleteCaption(data.timestamp);
+          } else if (data.type === 'caption' || data.text) {
+            // Caption update
+            // Server sends all existing captions on reconnect, so duplicates are handled by addCaption
+            addCaption(data);
+            
+            // When ANY caption arrives, automatically show captions (hide status message)
+            // Translation has started, so show captions regardless of status
+            if (captions.length === 1) {
+              serviceStatus.style.display = 'none';
+              captionsList.style.display = 'flex';
+              loadingState.style.display = 'none';
+            }
+          }
+        } catch (error) {
+          console.error('Failed to parse message:', error);
+          // Continue processing - don't break on one bad message
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        // Check if connection is actually closed (readyState 2 = CLOSED)
+        if (eventSource.readyState === EventSource.CLOSED) {
+          console.log('Connection closed, reconnecting...');
+          updateStatus(false);
+          stopConnectionHealthCheck();
+          
+          // Faster reconnection: 1s, 2s, 4s, 8s, max 10s
+          reconnectAttempts++;
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 10000);
+          
+          console.log(`Reconnecting in ${delay/1000}s...`);
+          setTimeout(() => {
+            connect();
+          }, delay);
+        } else {
+          // Connection is still open or connecting, just log
+          console.log('Connection state:', eventSource.readyState === EventSource.CONNECTING ? 'Connecting...' : 'Open');
+        }
+      };
+    }
+    
+    // ===== EVENT LISTENERS =====
+    
+    // Throttle scroll events for performance
+    let focusUpdateTimeout;
+    window.addEventListener('scroll', () => {
+      checkScrollPosition();
+      // Throttle focus updates
+      clearTimeout(focusUpdateTimeout);
+      focusUpdateTimeout = setTimeout(updateFocusClasses, 50);
+    }, { passive: true });
+    
+    // Initialize lastScrollTop on page load
+    lastScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    
+    // Also update on resize
+    window.addEventListener('resize', () => {
+      updateFocusClasses();
+    }, { passive: true });
+    
+    scrollBottomBtn.addEventListener('click', () => {
+      // User clicked scroll to bottom - re-enable auto-scroll
+      isAtBottom = true;
+      isUserScrolling = false;
+      scrollToBottom(true);
+    });
+    
+    // Handle page visibility changes (tab background/foreground)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        // Tab became visible - check connection health
+        const timeSinceLastMessage = Date.now() - lastMessageTime;
+        
+        // Re-check scroll position and focus
+        checkScrollPosition();
+        updateFocusClasses();
+        
+        // If no connection or connection appears stale, reconnect
+        if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+          console.log('Tab visible - no connection, reconnecting...');
+          connect();
+        } else if (timeSinceLastMessage > 10000) {
+          // Connection exists but no messages for 10+ seconds - likely stale
+          console.log('Tab visible - connection appears stale, reconnecting...');
+          reconnectAttempts = 0; // Reset attempts for visibility reconnect
+          connect();
+        } else {
+          // Connection seems OK, just restart health check
+          startConnectionHealthCheck();
+        }
+      } else {
+        // Tab hidden - stop health checks to save resources
+        stopConnectionHealthCheck();
+      }
+    });
+    
+    // Handle page show (mobile browsers - screen unlock, back/forward cache)
+    window.addEventListener('pageshow', (event) => {
+      // Page was restored from back/forward cache or screen unlock
+      if (event.persisted || document.visibilityState === 'visible') {
+        const timeSinceLastMessage = Date.now() - lastMessageTime;
+        
+        // Re-sync UI state
+        checkScrollPosition();
+        updateFocusClasses();
+        
+        // If been away for a while, reconnect
+        if (timeSinceLastMessage > 5000) {
+          console.log('Page shown - reconnecting after being away...');
+          reconnectAttempts = 0; // Reset attempts
+          connect();
+        } else if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+          connect();
+        } else {
+          startConnectionHealthCheck();
+        }
+      }
+    });
+    
+    // Handle window focus (desktop browsers)
+    window.addEventListener('focus', () => {
+      const timeSinceLastMessage = Date.now() - lastMessageTime;
+      
+      if (timeSinceLastMessage > 10000) {
+        console.log('Window focused - checking connection...');
+        if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+          connect();
+        } else {
+          startConnectionHealthCheck();
+        }
+      }
+    });
+    
+    // Handle online/offline events
+    window.addEventListener('online', () => {
+      console.log('Network online - reconnecting...');
+      reconnectAttempts = 0; // Reset attempts
+      connect();
+    });
+    
+    window.addEventListener('offline', () => {
+      console.log('Network offline');
+      updateStatus(false);
+      stopConnectionHealthCheck();
+    });
+    
+    // ===== INITIALIZATION =====
+    
+    // Start connection
+    connect();
+    
+    // Initialize scroll state
+    lastScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    isAtBottom = true; // Assume at bottom on initial load
+    isUserScrolling = false;
+    
+    // Initial scroll check
+    checkScrollPosition();
+    
+    // Initial focus update
+    setTimeout(updateFocusClasses, 200);
+    
+    // Ensure we're at bottom on initial load
+    setTimeout(() => {
+      scrollToBottom(false); // Instant scroll to bottom on load
+    }, 100);
+  </script>
+</body>
+</html>
+
