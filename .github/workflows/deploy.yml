@@ -1,0 +1,38 @@
+name: Deploy to Linode
+
+# Deploys on every push to main. Also runnable manually from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never let two deploys run at once (avoids a half-built container).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -p "${SSH_PORT:-22}" \
+              -o StrictHostKeyChecking=accept-new \
+              "$SSH_USER@$SSH_HOST" \
+              "set -e \
+               && cd /root/opt/apps/Jgm-live-captions \
+               && git fetch origin \
+               && git reset --hard origin/main \
+               && docker compose -p jgm-live-captions up -d --build \
+               && docker image prune -f \
+               && docker compose -p jgm-live-captions ps"
