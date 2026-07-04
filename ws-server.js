@@ -179,7 +179,7 @@ const wssCaptions = new WebSocket.Server({
 
 // Soniox configuration
 const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
-const DEFAULT_SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '885a41baf0c85746228dd44ab442c3770e2c69f4f6f22bb7e3244de0d6d7899c';
+const DEFAULT_SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
 // YouTube Captions configuration (optional - only used if YOUTUBE_CAPTION_URL is set)

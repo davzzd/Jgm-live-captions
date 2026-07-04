@@ -31,7 +31,7 @@ nano .env  # or use your preferred editor
 
 Your `.env` file should look like:
 ```env
-SONIOX_MASTER_API_KEY=885a41baf0c85746228dd44ab442c3770e2c69f4f6f22bb7e3244de0d6d7899c
+SONIOX_MASTER_API_KEY=your_soniox_api_key_here
 PORT=8080
 NODE_ENV=production
 ```
