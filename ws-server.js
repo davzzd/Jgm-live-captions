@@ -197,6 +197,9 @@ const wssCaptions = new WebSocket.Server({
 
 // Soniox configuration
 const SONIOX_WS_URL = process.env.SONIOX_WS_URL || 'wss://stt-rt.soniox.com/transcribe-websocket';
+// Fixed in code on purpose: a SONIOX_MODEL line in a server's .env once kept production on an
+// older model for months without anyone noticing. Change it here and deploy.
+const SONIOX_MODEL = 'stt-rt-v5';
 const DEFAULT_SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
@@ -3688,7 +3691,7 @@ function buildSonioxConfig(config) {
 
   const sonioxConfig = {
     api_key: config.apiKey,
-    model: process.env.SONIOX_MODEL || 'stt-rt-v5',
+    model: SONIOX_MODEL,
     audio_format: 's16le',
     sample_rate: 16000,
     num_channels: 1,
@@ -3786,7 +3789,10 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage, options = {}) {
     finishTimer: null
   };
 
-  console.log(`🔌 Connecting to Soniox (session ${session.id}${resume ? ', reconnect' : ''})...`);
+  console.log(`🔌 Connecting to Soniox (session ${session.id}${resume ? ', reconnect' : ''}, model ${SONIOX_MODEL})...`);
+  if (process.env.SONIOX_MODEL && process.env.SONIOX_MODEL !== SONIOX_MODEL) {
+    console.warn(`⚠️ SONIOX_MODEL=${process.env.SONIOX_MODEL} in the environment is ignored; the model is set in the code (${SONIOX_MODEL})`);
+  }
   console.log(`   API Key: [redacted] (${config.apiKey.length} chars)`);
   console.log(`   ${config.sourceLanguage} → ${config.targetLanguage} (${translate ? 'translation' : 'transcription only'})`);
 
