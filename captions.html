@@ -143,11 +143,16 @@
      * RESOLUME SUBTITLE DISPLAY SCRIPT
      * 
      * This script:
-     * 1. Connects to local WebSocket server (ws://localhost:8080/captions)
-     * 2. Receives translated caption text (plain strings)
-     * 3. Displays only FINAL captions (ignores partials)
-     * 4. Updates text with smooth fade transitions
-     * 5. Handles connection errors gracefully
+     * 1. Connects to the WebSocket server (/captions)
+     * 2. Receives JSON messages:
+     *    { type: 'caption', gen, text, partial } - full running text of the current paragraph
+     *        (text = confirmed words, partial = live words that may still change).
+     *        The server owns the text: it is displayed as-is, never merged.
+     *        A new `gen` means a new paragraph (after a pause or a clear).
+     *    { type: 'settings', settings } - display settings from the admin page
+     *    { type: 'clear' } - clear immediately
+     * 3. Wraps to wordsPerLine / maxLines and clears after pauseThreshold if autoClear is on
+     * 4. Handles connection errors gracefully
      */
 
     const subtitleContainer = document.getElementById('subtitle-container');
@@ -162,9 +167,10 @@
     let reconnectTimeout = null;
     let connectionStartTime = 0;
     
-    // Subtitle accumulation
-    let accumulatedText = ''; // Store all accumulated text as one continuous string
-    let lastUpdateTime = 0;
+    // Current caption (owned by the server)
+    let currentGen = null;
+    let committedText = '';
+    let partialText = '';
     let clearTimeoutId = null;
     
     // Settings (with defaults)
@@ -190,95 +196,68 @@
     };
 
     /**
-     * Update subtitle text (accumulates multiple lines)
-     * @param {string} text - The caption text to display
+     * Render a caption message from the server
+     * @param {{gen: number, text: string, partial: string}} caption
      */
-    function updateSubtitle(text) {
-      if (!text || text.trim() === '') {
-        // Empty text - start clearing timer
+    function renderCaption(caption) {
+      if (caption.gen !== currentGen) {
+        // New paragraph
+        currentGen = caption.gen;
+      }
+      committedText = caption.text || '';
+      partialText = caption.partial || '';
+      paint();
+    }
+
+    /**
+     * Draw committed + partial text, wrapped to the display settings
+     */
+    function paint() {
+      const fullText = [committedText, partialText].filter(Boolean).join(' ').trim();
+      if (!fullText) {
+        // Nothing to show - clear after the pause threshold
         startClearTimer();
         return;
       }
 
-      const now = Date.now();
-      const timeSinceLastUpdate = now - lastUpdateTime;
-      lastUpdateTime = now;
-
-      // If there's a significant pause (paragraph break), clear accumulated text
-      if (timeSinceLastUpdate > settings.pauseThreshold && accumulatedText.length > 0) {
-        console.log('📝 Paragraph break detected, clearing accumulated text');
-        accumulatedText = '';
-      }
-
-      // Accumulate text into a continuous paragraph (not split by sentences)
-      const trimmedText = text.trim();
-      if (trimmedText) {
-        // Check if this is an update to existing text (partial -> final)
-        if (accumulatedText && trimmedText.startsWith(accumulatedText)) {
-          // This is a partial update - replace the accumulated text
-          accumulatedText = trimmedText;
-        } else if (trimmedText !== accumulatedText) {
-          // This is new text - append to accumulated text with a space
-          if (accumulatedText && !accumulatedText.endsWith(' ')) {
-            accumulatedText += ' ' + trimmedText;
-          } else {
-            accumulatedText = (accumulatedText || '') + trimmedText;
-          }
-        }
-      }
-
-      // Apply strict word wrapping to the entire accumulated text
-      let displayText = '';
-      if (accumulatedText.length > 0) {
-        const words = accumulatedText.split(/\s+/).filter(w => w.length > 0); // Split by whitespace and filter empty
-        
-        if (settings.wordsPerLine > 0 && words.length > 0) {
-          // Strict word wrapping: exactly wordsPerLine words per line
-          const wrappedLines = [];
-          let currentLine = [];
-          
-          words.forEach((word) => {
-            currentLine.push(word);
-            
-            // When we reach the word limit, create a new line
-            if (currentLine.length >= settings.wordsPerLine) {
-              wrappedLines.push(currentLine.join(' '));
-              currentLine = [];
-            }
-          });
-          
-          // Add remaining words as the last line
-          if (currentLine.length > 0) {
-            wrappedLines.push(currentLine.join(' '));
-          }
-          
-          // Limit to max lines (keep only the most recent lines)
-          if (wrappedLines.length > settings.maxLines) {
-            wrappedLines.splice(0, wrappedLines.length - settings.maxLines);
-          }
-          
-          displayText = wrappedLines.join('\n');
-        } else {
-          // No word wrapping - use text as is
-          displayText = accumulatedText;
-        }
-      }
-      
-      subtitleText.textContent = displayText;
+      subtitleText.textContent = wrapText(fullText);
 
       // Show subtitle with fade-in
       subtitleContainer.classList.remove('empty');
       subtitleContainer.classList.add('visible');
 
-      // Reset clear timer (new text arrived, don't clear yet)
+      // Restart the auto-clear countdown (text stays until nothing new arrives for pauseThreshold)
       resetClearTimer();
+      startClearTimer();
+    }
 
-      // Log update (for debugging)
-      const wordCount = accumulatedText.split(/\s+/).filter(w => w.length > 0).length;
-      const lineCount = displayText.split('\n').length;
-      if (Math.random() < 0.1) { // Log 10% of updates to reduce console spam
-        console.log('📝 Subtitle updated:', wordCount, 'words,', lineCount, 'lines');
+    /**
+     * Strict word wrapping: wordsPerLine words per line, keep only the last maxLines lines
+     */
+    function wrapText(fullText) {
+      const words = fullText.split(/\s+/).filter(w => w.length > 0);
+      if (!(settings.wordsPerLine > 0) || words.length === 0) {
+        return fullText;
       }
+
+      const wrappedLines = [];
+      let currentLine = [];
+      words.forEach((word) => {
+        currentLine.push(word);
+        if (currentLine.length >= settings.wordsPerLine) {
+          wrappedLines.push(currentLine.join(' '));
+          currentLine = [];
+        }
+      });
+      if (currentLine.length > 0) {
+        wrappedLines.push(currentLine.join(' '));
+      }
+
+      // Limit to max lines (keep only the most recent lines)
+      if (wrappedLines.length > settings.maxLines) {
+        wrappedLines.splice(0, wrappedLines.length - settings.maxLines);
+      }
+      return wrappedLines.join('\n');
     }
 
     /**
@@ -292,7 +271,8 @@
       clearTimeoutId = setTimeout(() => {
         if (settings.autoClear) {
           console.log('📝 Clearing subtitles after pause');
-          accumulatedText = '';
+          committedText = '';
+          partialText = '';
           subtitleText.textContent = '';
           subtitleContainer.classList.remove('visible');
           subtitleContainer.classList.add('empty');
@@ -316,7 +296,8 @@
      */
     function clearCaptions() {
       console.log('🧹 Clearing captions');
-      accumulatedText = '';
+      committedText = '';
+      partialText = '';
       subtitleText.textContent = '';
       subtitleContainer.classList.remove('visible');
       subtitleContainer.classList.add('empty');
@@ -326,8 +307,6 @@
         clearTimeout(clearTimeoutId);
         clearTimeoutId = null;
       }
-      
-      lastUpdateTime = 0; // Reset update time
     }
 
     /**
@@ -507,30 +486,26 @@
         };
 
         ws.onmessage = (event) => {
+          let data;
           try {
-            // Check if message is JSON (settings/clear) or plain text (caption)
-            let data;
-            try {
-              data = JSON.parse(event.data);
-              if (data.type === 'settings') {
-                // Apply settings
-                applySettings(data.settings);
-                console.log('✅ Settings applied:', data.settings);
-                return;
-              } else if (data.type === 'clear') {
-                // Clear captions
-                clearCaptions();
-                console.log('🧹 Captions cleared');
-                return;
-              }
-            } catch (e) {
-              // Not JSON, treat as plain text caption
-              const text = event.data;
-              console.log('📥 Received caption text:', text);
-              
-              // updateSubtitle handles empty text and accumulation
-              updateSubtitle(text);
-              return;
+            data = JSON.parse(event.data);
+          } catch (e) {
+            console.warn('⚠️ Ignoring non-JSON message:', String(event.data).substring(0, 80));
+            return;
+          }
+
+          try {
+            if (!data || typeof data !== 'object') return;
+            if (data.type === 'caption') {
+              renderCaption(data);
+            } else if (data.type === 'settings') {
+              applySettings(data.settings);
+              console.log('✅ Settings applied:', data.settings);
+              // Re-wrap the current text with the new settings
+              if (committedText || partialText) paint();
+            } else if (data.type === 'clear') {
+              clearCaptions();
+              console.log('🧹 Captions cleared');
             }
           } catch (error) {
             console.error('❌ Error processing message:', error);

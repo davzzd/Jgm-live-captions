@@ -12,6 +12,7 @@ RUN npm ci --only=production
 
 # Copy application files
 COPY ws-server.js ./
+COPY segmenter.js ./
 COPY captions.html ./
 COPY client.html ./
 COPY audience.html ./
