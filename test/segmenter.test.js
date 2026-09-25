@@ -251,3 +251,19 @@ test('resetOverlay starts a new paragraph; previousOverlay carries across sessio
   s.resetOverlay(10);
   assert.equal(s.overlaySnapshot().text, '');
 });
+
+
+test('a space is inserted when a chunk follows punctuation without one', () => {
+  const s = translator();
+  assert.deepEqual(s.ingest([tr('Hello,', true)], 0), []);
+  const out = s.ingest([tr('My name is David.', true)], 100); // ends a sentence: emitted now
+  assert.equal(out[0].text, 'Hello, My name is David.');
+  // Normal Soniox tokens carry their own leading space and must not get a second one
+  s.ingest([tr('Amen', true)], 300);
+  s.ingest([tr(' Hallelujah.', true)], 400);
+  assert.equal(s.flush('end', 500).length, 0);
+  const s2 = translator();
+  s2.ingest([tr('Amen,', true)], 0);
+  s2.ingest([tr(' Hallelujah', true)], 100);
+  assert.equal(s2.flush('end', 200)[0].text, 'Amen, Hallelujah');
+});
