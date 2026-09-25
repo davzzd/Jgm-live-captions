@@ -1179,7 +1179,19 @@
       }
       
       // Create new SSE connection (no token needed)
-      const streamUrl = `/audience/stream`;
+      // A random ID kept on this phone lets the admin page tell a reconnect from a new viewer.
+      // It identifies the browser only, not the person.
+      let viewerId = '';
+      try {
+        viewerId = localStorage.getItem('jgmViewerId') || '';
+        if (!/^[a-z0-9]{12,32}$/.test(viewerId)) {
+          viewerId = Array.from(crypto.getRandomValues(new Uint8Array(10)), b => (b % 36).toString(36)).join('');
+          localStorage.setItem('jgmViewerId', viewerId);
+        }
+      } catch (e) {
+        viewerId = '';
+      }
+      const streamUrl = `/audience/stream` + (viewerId ? `?vid=${viewerId}` : '');
       eventSource = new EventSource(streamUrl);
       
       eventSource.onopen = () => {
