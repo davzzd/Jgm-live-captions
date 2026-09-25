@@ -1186,7 +1186,7 @@ app.get('/transcript', (req, res) => {
         const time = new Date(c.timestamp).toLocaleTimeString();
         const date = new Date(c.timestamp).toLocaleDateString();
         const tag = c.tag || '';
-        const tagDisplay = tag ? `<span class="caption-tag tag-${tag.replace(/\s+/g, '-')}">[${tag}]</span>` : '';
+        const tagDisplay = tag ? `<span class="caption-tag tag-${tag.replace(/\s+/g, '-')}">${tag}</span>` : '';
         return `
             <div class="caption-item" data-timestamp="${c.timestamp}" data-index="${index}" data-tag="${escapeHtml(tag)}">
               <div class="caption-header">
@@ -1224,116 +1224,484 @@ app.get('/transcript', (req, res) => {
           <title>Caption Transcript</title>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
+          <script>
+            // Apply the saved theme before the page paints (avoids a flash)
+            try {
+              var savedTheme = localStorage.getItem('transcriptTheme');
+              if (savedTheme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+            } catch (e) {}
+          </script>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-              font-family: 'Courier New', monospace;
-              background: #1e1e1e;
-              color: #d4d4d4;
-              padding: 20px;
-              font-size: 13px;
-              line-height: 1.4;
+
+            /* Neutral dark by default; light "paper" theme via the ☀/☾ button */
+            :root {
+              --bg: #121316;
+              --surface: #1B1D21;
+              --surface-2: #24272C;
+              --border: #2F3339;
+              --border-strong: #3E434B;
+              --text: #E8E6E1;
+              --text-dim: #A09E97;
+              --text-faint: #75736D;
+              --accent: #F0B35B;
+              --accent-text: #1A1A1A;
+              --accent-soft: rgba(240, 179, 91, 0.14);
+              --ok: #6FCF97;
+              --danger: #E5484D;
+              --danger-soft: rgba(229, 72, 77, 0.16);
+              --info: #86B7F2;
+              --info-soft: rgba(134, 183, 242, 0.14);
+              --btn: #2A2D33;
+              --btn-hover: #363A41;
+              --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+              --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
             }
+            :root[data-theme="light"] {
+              --bg: #F4F1EA;
+              --surface: #FFFFFF;
+              --surface-2: #F1EEE6;
+              --border: #E0DCD2;
+              --border-strong: #CBC6BA;
+              --text: #1E1E1E;
+              --text-dim: #66635C;
+              --text-faint: #97938A;
+              --accent: #B8781A;
+              --accent-text: #FFFFFF;
+              --accent-soft: rgba(184, 120, 26, 0.12);
+              --ok: #2E8B57;
+              --danger: #C62828;
+              --danger-soft: rgba(198, 40, 40, 0.1);
+              --info: #2F6FBF;
+              --info-soft: rgba(47, 111, 191, 0.1);
+              --btn: #ECE8DF;
+              --btn-hover: #E1DCD1;
+              --shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+            }
+
+            html { background: var(--bg); }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+              background: var(--bg);
+              color: var(--text);
+              padding: 20px;
+              font-size: 15px;
+              line-height: 1.5;
+              -webkit-font-smoothing: antialiased;
+            }
+
+            /* ----- header ----- */
             .header {
               position: sticky;
               top: 0;
-              background: #2d2d30;
-              padding: 15px;
+              background: var(--surface);
+              padding: 14px 20px;
               margin: -20px -20px 20px -20px;
-              border-bottom: 2px solid #3e3e42;
+              border-bottom: 1px solid var(--border);
               z-index: 100;
             }
-            h1 {
-              color: #4ec9b0;
-              margin-bottom: 10px;
-              font-size: 20px;
+            .header-row {
+              display: flex;
+              align-items: center;
+              gap: 16px;
+              flex-wrap: wrap;
             }
+            h1 {
+              font-size: 18px;
+              font-weight: 600;
+              letter-spacing: 0.2px;
+              color: var(--text);
+              white-space: nowrap;
+            }
+            .status-group {
+              display: flex;
+              align-items: center;
+              gap: 14px;
+              font-size: 13px;
+              color: var(--text-dim);
+              margin-right: auto;
+            }
+            .live {
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+            }
+            .live-dot {
+              width: 9px;
+              height: 9px;
+              border-radius: 50%;
+              background: var(--text-faint);
+              box-shadow: 0 0 0 0 transparent;
+              transition: background 0.3s;
+            }
+            .live-dot.on {
+              background: var(--ok);
+              box-shadow: 0 0 0 3px rgba(111, 207, 151, 0.18);
+            }
+            .live-dot.off {
+              background: var(--danger);
+            }
+            .waiting-counter {
+              color: var(--accent);
+              font-weight: 600;
+            }
+            .waiting-counter.alert {
+              color: var(--danger);
+            }
+
             .controls {
               display: flex;
-              gap: 10px;
+              gap: 8px;
               flex-wrap: wrap;
               align-items: center;
+            }
+            .controls button, .controls a, .controls select {
+              background: var(--btn);
+              color: var(--text);
+              border: 1px solid var(--border-strong);
+              padding: 7px 12px;
+              border-radius: 8px;
+              cursor: pointer;
+              text-decoration: none;
+              font-family: inherit;
+              font-size: 13px;
+              line-height: 1.2;
+              transition: background 0.15s, border-color 0.15s;
+            }
+            .controls button:hover, .controls a:hover, .controls select:hover {
+              background: var(--btn-hover);
+            }
+            .controls button:focus-visible, .controls select:focus-visible {
+              outline: 2px solid var(--info);
+              outline-offset: 1px;
+            }
+            .controls .danger {
+              color: var(--danger);
+              border-color: transparent;
+              background: var(--danger-soft);
+            }
+            .controls .danger:hover {
+              background: var(--danger);
+              color: #fff;
             }
             .controls button.yt-btn.paused {
-              background: #c5534b;
+              background: var(--danger);
+              border-color: var(--danger);
+              color: #fff;
+              font-weight: 600;
             }
             .controls button.yt-btn:disabled {
-              background: #3c3c3c;
-              color: #858585;
+              opacity: 0.55;
               cursor: default;
             }
-            .rejected-btn {
-              background: #3c3c3c !important;
+            .controls button.theme-btn {
+              padding: 7px 10px;
+              font-size: 14px;
             }
+
             .review-bar {
               display: flex;
-              gap: 10px;
+              gap: 12px;
               align-items: center;
               flex-wrap: wrap;
-              margin-top: 10px;
-              font-size: 12px;
+              margin-top: 12px;
+              font-size: 13px;
             }
             .review-label {
-              color: #9cdcfe;
+              color: var(--text-dim);
             }
             .mode-switch {
               display: inline-flex;
-              border: 1px solid #555;
-              border-radius: 4px;
-              overflow: hidden;
+              background: var(--btn);
+              border: 1px solid var(--border-strong);
+              border-radius: 999px;
+              padding: 3px;
             }
             .mode-btn {
-              background: #3c3c3c;
-              color: #d4d4d4;
+              background: transparent;
+              color: var(--text-dim);
               border: none;
-              padding: 6px 12px;
+              padding: 6px 14px;
+              border-radius: 999px;
               font-family: inherit;
-              font-size: 12px;
+              font-size: 13px;
+              font-weight: 500;
               cursor: pointer;
+              transition: background 0.15s, color 0.15s;
             }
-            .mode-btn + .mode-btn {
-              border-left: 1px solid #555;
+            .mode-btn:hover {
+              color: var(--text);
             }
             .mode-btn.active {
-              background: #0e639c;
-              color: #fff;
-              font-weight: bold;
+              background: var(--surface);
+              color: var(--text);
+              box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
             }
             .mode-btn.active.veto {
-              background: #b5890a;
-            }
-            .waiting-counter {
-              color: #dcdcaa;
-              font-weight: bold;
-            }
-            .waiting-counter.alert {
-              color: #f48771;
+              background: var(--accent);
+              color: var(--accent-text);
+              font-weight: 600;
             }
             .review-hint {
-              color: #858585;
+              color: var(--text-faint);
             }
-            .queue-container:empty {
-              display: none;
-            }
-            .queue-container {
+            .yt-paused-banner {
               margin-top: 12px;
+              padding: 10px 14px;
+              background: var(--danger-soft);
+              border: 1px solid var(--danger);
+              border-radius: 10px;
+              color: var(--danger);
+              font-size: 14px;
+              font-weight: 600;
+            }
+            .stats {
+              color: var(--text-faint);
+              margin-top: 10px;
+              font-size: 12px;
+            }
+
+            /* ----- transcript ----- */
+            .content {
+              max-width: 960px;
+              margin: 0 auto;
+            }
+            .caption-item {
+              padding: 12px 16px;
+              margin-bottom: 8px;
+              background: var(--surface);
+              border: 1px solid var(--border);
+              border-left: 3px solid var(--border);
+              border-radius: 10px;
+              transition: background 0.15s, border-color 0.15s;
+              position: relative;
+            }
+            .caption-item:hover {
+              background: var(--surface-2);
+              border-color: var(--border-strong);
+              border-left-color: var(--border-strong);
+            }
+            .caption-item.editing {
+              background: var(--info-soft);
+              border-color: var(--info);
+              border-left-color: var(--info);
+            }
+            .caption-item.edited {
+              border-left-color: var(--info);
+            }
+            .caption-header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              gap: 10px;
+              margin-bottom: 4px;
+              min-height: 24px;
+            }
+            .caption-time {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              color: var(--text-faint);
+              font-size: 12px;
+              font-family: var(--mono);
+            }
+            .caption-time .date {
+              display: none; /* the session date is the same for every line; the time is what matters */
+            }
+            .caption-time .time {
+              color: var(--text-dim);
+              font-weight: 500;
+            }
+            .caption-actions {
+              display: flex;
+              gap: 4px;
+              align-items: center;
+            }
+            .tag-buttons {
+              display: flex;
+              gap: 2px;
+              margin-right: 6px;
+              opacity: 0;
+              transition: opacity 0.15s;
+            }
+            .caption-item:hover .tag-buttons,
+            .caption-item:focus-within .tag-buttons {
+              opacity: 1;
+            }
+            .tag-btn {
+              background: transparent;
+              border: 1px solid transparent;
+              color: var(--text-dim);
+              cursor: pointer;
+              padding: 4px 7px;
+              border-radius: 6px;
+              font-size: 13px;
+              line-height: 1;
+              transition: background 0.15s, border-color 0.15s;
+            }
+            .tag-btn:hover {
+              background: var(--btn-hover);
+              border-color: var(--border-strong);
+            }
+            .tag-btn.active {
+              background: var(--accent-soft);
+              border-color: var(--accent);
+            }
+            .tag-btn.tag-clear {
+              font-size: 11px;
+              color: var(--text-faint);
+            }
+            .tag-btn.tag-clear:hover {
+              background: var(--danger-soft);
+              border-color: var(--danger);
+              color: var(--danger);
+            }
+            .caption-tag {
+              display: inline-flex;
+              align-items: center;
+              padding: 2px 9px;
+              border-radius: 999px;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              font-size: 11px;
+              font-weight: 600;
+              letter-spacing: 0.3px;
+              text-transform: capitalize;
+              border: 1px solid transparent;
+            }
+            .caption-tag.tag-prophecy { background: rgba(171, 130, 255, 0.16); color: #C9B3FF; border-color: rgba(171, 130, 255, 0.35); }
+            .caption-tag.tag-healing-declaration { background: rgba(111, 207, 151, 0.16); color: #8FDDB0; border-color: rgba(111, 207, 151, 0.35); }
+            .caption-tag.tag-scripture { background: rgba(134, 183, 242, 0.16); color: #A6CBF6; border-color: rgba(134, 183, 242, 0.35); }
+            .caption-tag.tag-ignore { background: rgba(160, 158, 151, 0.16); color: #B5B3AC; border-color: rgba(160, 158, 151, 0.35); }
+            .caption-tag.tag-person-call-out { background: rgba(240, 179, 91, 0.16); color: #F3C57F; border-color: rgba(240, 179, 91, 0.35); }
+            .caption-tag.tag-emphasis { background: rgba(255, 224, 102, 0.16); color: #F5DD7A; border-color: rgba(255, 224, 102, 0.35); }
+            .caption-tag.tag-POINT { background: rgba(229, 72, 77, 0.16); color: #F08A8D; border-color: rgba(229, 72, 77, 0.35); text-transform: uppercase; }
+            :root[data-theme="light"] .caption-tag.tag-prophecy { color: #6A3FC7; }
+            :root[data-theme="light"] .caption-tag.tag-healing-declaration { color: #1F7A46; }
+            :root[data-theme="light"] .caption-tag.tag-scripture { color: #245E9E; }
+            :root[data-theme="light"] .caption-tag.tag-ignore { color: #5E5C56; }
+            :root[data-theme="light"] .caption-tag.tag-person-call-out { color: #9A5F0C; }
+            :root[data-theme="light"] .caption-tag.tag-emphasis { color: #8A6D00; }
+            :root[data-theme="light"] .caption-tag.tag-POINT { color: #B71C1C; }
+
+            .edit-btn, .replace-btn, .delete-btn {
+              background: transparent;
+              border: 1px solid transparent;
+              color: var(--text-dim);
+              cursor: pointer;
+              padding: 4px 8px;
+              border-radius: 6px;
+              font-size: 13px;
+              line-height: 1;
+              opacity: 0;
+              transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+            }
+            .caption-item:hover .edit-btn,
+            .caption-item:hover .replace-btn,
+            .caption-item:hover .delete-btn,
+            .caption-item:focus-within .edit-btn,
+            .caption-item:focus-within .replace-btn,
+            .caption-item:focus-within .delete-btn {
+              opacity: 1;
+            }
+            .edit-btn:hover { background: var(--info-soft); border-color: var(--info); }
+            .replace-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
+            .delete-btn:hover { background: var(--danger-soft); border-color: var(--danger); }
+
+            .caption-text {
+              color: var(--text);
+              font-size: 16px;
+              line-height: 1.6;
+              min-height: 24px;
+              cursor: pointer;
+              word-wrap: break-word;
+              word-break: normal;
+              max-width: 100%;
+              border-radius: 6px;
+            }
+            .caption-text:hover {
+              background: var(--info-soft);
+              box-shadow: 0 0 0 4px var(--info-soft);
+            }
+            .caption-text[contenteditable="true"] {
+              background: var(--bg);
+              padding: 10px 12px;
+              border: 1px solid var(--info);
+              border-radius: 8px;
+              outline: none;
+              cursor: text;
+              box-shadow: none;
+            }
+            .caption-text[contenteditable="true"]:focus {
+              box-shadow: 0 0 0 3px var(--info-soft);
+            }
+            .edit-actions {
+              display: flex;
+              gap: 8px;
+              margin-top: 10px;
+              justify-content: flex-end;
+            }
+            .edit-actions button {
+              padding: 7px 14px;
+              border: 1px solid var(--border-strong);
+              border-radius: 8px;
+              cursor: pointer;
+              font-size: 13px;
+              font-family: inherit;
+              transition: background 0.15s;
+            }
+            .save-btn {
+              background: var(--info);
+              border-color: var(--info) !important;
+              color: #0F1620;
+              font-weight: 600;
+            }
+            .save-btn:hover { filter: brightness(1.08); }
+            .cancel-btn {
+              background: var(--btn);
+              color: var(--text);
+            }
+            .cancel-btn:hover { background: var(--btn-hover); }
+            .edited-indicator {
+              display: inline-block;
+              margin-left: 8px;
+              color: var(--info);
+              font-size: 10px;
+              font-weight: 700;
+              letter-spacing: 0.5px;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            }
+            .no-captions {
+              color: var(--text-faint);
+              text-align: center;
+              padding: 70px 20px;
+              font-size: 15px;
+            }
+
+            /* ----- review queue (Delay 10s) ----- */
+            .queue-container:empty { display: none; }
+            .queue-container {
+              max-width: 960px;
+              margin: 16px auto 0;
             }
             .queue-item {
-              padding: 12px;
-              border-left: 3px solid #d7ba7d;
-              margin-bottom: 12px;
-              background: #2d2a22;
-              border-radius: 3px;
+              padding: 12px 16px;
+              margin-bottom: 8px;
+              background: var(--surface);
+              border: 1px solid var(--border);
+              border-left: 3px solid var(--accent);
+              border-radius: 10px;
             }
             .queue-item.nudge {
-              outline: 2px solid #f48771;
+              outline: 2px solid var(--danger);
             }
             .queue-item.editing {
-              background: #3a3a3d;
-              border-left-color: #dcdcaa;
+              background: var(--info-soft);
+              border-color: var(--info);
+              border-left-color: var(--info);
             }
             .queue-item.blocked {
-              border-left-color: #858585;
+              border-left-color: var(--text-faint);
+              opacity: 0.85;
             }
             .queue-meta {
               display: flex;
@@ -1341,45 +1709,55 @@ app.get('/transcript', (req, res) => {
               align-items: center;
               gap: 10px;
               margin-bottom: 6px;
-              font-size: 11px;
-              color: #858585;
+              font-size: 12px;
+              color: var(--text-faint);
+            }
+            .queue-time {
+              font-family: var(--mono);
+              color: var(--text-dim);
             }
             .queue-status {
-              color: #d7ba7d;
-              font-weight: bold;
+              color: var(--accent);
+              font-weight: 600;
             }
             .queue-status.warn {
-              color: #f48771;
+              color: var(--danger);
             }
             .queue-text {
-              color: #d4d4d4;
-              font-size: 14px;
+              color: var(--text);
+              font-size: 16px;
               line-height: 1.6;
               word-wrap: break-word;
             }
+            .queue-item.editing .queue-text { font-weight: 600; }
             .queue-edit-input {
               width: 100%;
-              background: #1e1e1e;
-              color: #d4d4d4;
-              border: 1px solid #dcdcaa;
-              border-radius: 3px;
-              padding: 8px;
+              background: var(--bg);
+              color: var(--text);
+              border: 1px solid var(--info);
+              border-radius: 8px;
+              padding: 10px 12px;
               font-family: inherit;
-              font-size: 14px;
+              font-size: 16px;
               line-height: 1.6;
               resize: vertical;
             }
+            .queue-edit-input:focus {
+              outline: none;
+              box-shadow: 0 0 0 3px var(--info-soft);
+            }
             .queue-bar {
-              height: 4px;
-              background: #3e3e42;
-              border-radius: 2px;
+              height: 5px;
+              background: var(--border);
+              border-radius: 3px;
               overflow: hidden;
-              margin: 8px 0;
+              margin: 10px 0;
             }
             .queue-bar-fill {
               height: 100%;
-              background: #d7ba7d;
+              background: var(--accent);
               width: 100%;
+              transition: width 0.2s linear;
             }
             .queue-actions {
               display: flex;
@@ -1387,36 +1765,67 @@ app.get('/transcript', (req, res) => {
               flex-wrap: wrap;
             }
             .queue-actions button {
-              background: #3c3c3c;
-              color: #d4d4d4;
-              border: 1px solid #555;
-              padding: 6px 12px;
-              border-radius: 3px;
+              background: var(--btn);
+              color: var(--text);
+              border: 1px solid var(--border-strong);
+              padding: 8px 14px;
+              border-radius: 8px;
               cursor: pointer;
               font-family: inherit;
-              font-size: 12px;
+              font-size: 13px;
+              transition: background 0.15s, border-color 0.15s;
             }
             .queue-actions button:hover:not(:disabled) {
-              border-color: #d7ba7d;
+              background: var(--btn-hover);
+              border-color: var(--accent);
             }
             .queue-actions button.send {
-              background: #0e639c;
-              border-color: #0e639c;
-              color: #fff;
+              background: var(--accent);
+              border-color: var(--accent);
+              color: var(--accent-text);
+              font-weight: 600;
+            }
+            .queue-actions button.send:hover:not(:disabled) {
+              filter: brightness(1.08);
             }
             .queue-actions button.reject {
-              background: #6b2b26;
-              border-color: #c5534b;
+              background: var(--danger-soft);
+              border-color: transparent;
+              color: var(--danger);
+            }
+            .queue-actions button.reject:hover:not(:disabled) {
+              background: var(--danger);
               color: #fff;
             }
             .queue-actions button:disabled {
               opacity: 0.4;
               cursor: default;
             }
+
+            /* ----- "new lines" jump button ----- */
+            .new-lines-btn {
+              position: fixed;
+              right: 28px;
+              bottom: 28px;
+              background: var(--accent);
+              color: var(--accent-text);
+              border: none;
+              border-radius: 999px;
+              padding: 10px 18px;
+              font-family: inherit;
+              font-size: 14px;
+              font-weight: 600;
+              cursor: pointer;
+              box-shadow: var(--shadow);
+              z-index: 200;
+            }
+            .new-lines-btn:hover { filter: brightness(1.08); }
+
+            /* ----- rejected lines modal ----- */
             .modal-backdrop {
               position: fixed;
               inset: 0;
-              background: rgba(0, 0, 0, 0.6);
+              background: rgba(0, 0, 0, 0.55);
               z-index: 1000;
               display: flex;
               align-items: center;
@@ -1424,355 +1833,108 @@ app.get('/transcript', (req, res) => {
               padding: 20px;
             }
             .modal {
-              background: #252526;
-              border: 1px solid #3e3e42;
-              border-radius: 6px;
-              width: min(720px, 100%);
+              background: var(--surface);
+              border: 1px solid var(--border);
+              border-radius: 14px;
+              width: min(760px, 100%);
               max-height: 80vh;
               display: flex;
               flex-direction: column;
+              box-shadow: var(--shadow);
             }
             .modal-header {
-              padding: 15px;
-              border-bottom: 1px solid #3e3e42;
+              padding: 16px 20px;
+              border-bottom: 1px solid var(--border);
             }
             .modal-header h2 {
-              color: #f48771;
-              font-size: 16px;
+              color: var(--text);
+              font-size: 17px;
+              font-weight: 600;
               margin-bottom: 4px;
             }
             .modal-note {
-              color: #858585;
-              font-size: 11px;
+              color: var(--text-dim);
+              font-size: 13px;
             }
             .rejected-list {
-              padding: 10px 15px;
+              padding: 8px 20px;
               overflow-y: auto;
               flex: 1;
             }
             .rejected-item {
               display: flex;
-              gap: 10px;
+              gap: 12px;
               align-items: flex-start;
-              padding: 8px 0;
-              border-bottom: 1px solid #3e3e42;
-              font-size: 13px;
+              padding: 10px 0;
+              border-bottom: 1px solid var(--border);
+              font-size: 15px;
             }
             .rejected-item .rejected-time {
-              color: #858585;
+              color: var(--text-faint);
               white-space: nowrap;
-              font-size: 11px;
-              padding-top: 2px;
+              font-size: 12px;
+              font-family: var(--mono);
+              padding-top: 3px;
             }
             .rejected-item .rejected-text {
               flex: 1;
-              color: #d4d4d4;
+              color: var(--text);
               word-wrap: break-word;
+              line-height: 1.5;
             }
             .rejected-item button, .modal-actions button {
-              background: #3c3c3c;
-              color: #d4d4d4;
-              border: 1px solid #555;
-              padding: 4px 10px;
-              border-radius: 3px;
+              background: var(--btn);
+              color: var(--text);
+              border: 1px solid var(--border-strong);
+              padding: 6px 12px;
+              border-radius: 8px;
               cursor: pointer;
               font-family: inherit;
-              font-size: 12px;
+              font-size: 13px;
+            }
+            .rejected-item button:hover, .modal-actions button:hover {
+              background: var(--btn-hover);
             }
             .modal-actions {
               display: flex;
               justify-content: flex-end;
               gap: 10px;
-              padding: 12px 15px;
-              border-top: 1px solid #3e3e42;
+              padding: 14px 20px;
+              border-top: 1px solid var(--border);
             }
             .modal-actions button.danger {
-              background: #6b2b26;
-              border-color: #c5534b;
+              background: var(--danger-soft);
+              border-color: transparent;
+              color: var(--danger);
+            }
+            .modal-actions button.danger:hover {
+              background: var(--danger);
               color: #fff;
             }
             .rejected-empty {
-              color: #858585;
-              font-style: italic;
-              padding: 20px 0;
+              color: var(--text-faint);
+              padding: 24px 0;
               text-align: center;
-            }
-            .yt-paused-banner {
-              margin-top: 10px;
-              padding: 8px 12px;
-              background: rgba(197, 83, 75, 0.2);
-              border: 1px solid #c5534b;
-              border-radius: 4px;
-              color: #f48771;
-              font-size: 13px;
-              font-weight: bold;
-            }
-            .controls button, .controls a {
-              background: #0e639c;
-              color: white;
-              border: none;
-              padding: 6px 12px;
-              border-radius: 3px;
-              cursor: pointer;
-              text-decoration: none;
-              font-family: inherit;
-              font-size: 12px;
-            }
-            .controls button:hover, .controls a:hover {
-              background: #1177bb;
-            }
-            .controls .danger {
-              background: #c5534b;
-            }
-            .controls .danger:hover {
-              background: #d16b64;
-            }
-            .stats {
-              color: #858585;
-              margin-top: 10px;
-              font-size: 11px;
             }
 
-            .content {
-              background: #252526;
-              border: 1px solid #3e3e42;
-              border-radius: 4px;
-              padding: 15px;
-              max-width: 100%;
-            }
-            .caption-item {
-              padding: 12px;
-              border-left: 3px solid #4ec9b0;
-              margin-bottom: 12px;
-              background: #2d2d30;
-              border-radius: 3px;
-              transition: all 0.2s;
-              position: relative;
-            }
-            .caption-item:hover {
-              background: #333337;
-              border-left-color: #5fd4c3;
-            }
-            .caption-item.editing {
-              border-left-color: #dcdcaa;
-              background: #3a3a3d;
-            }
-            .caption-item.edited {
-              border-left-color: #dcdcaa;
-            }
-            .caption-header {
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-              margin-bottom: 6px;
-            }
-            .caption-time {
-              color: #858585;
-              font-size: 11px;
-              font-weight: 500;
-            }
-            .caption-time .date {
-              margin-right: 8px;
-              color: #6a6a6a;
-            }
-            .caption-time .time {
-              color: #9cdcfe;
-              font-weight: 600;
-            }
-            .caption-actions {
-              display: flex;
-              gap: 6px;
-              align-items: center;
-            }
-            .tag-buttons {
-              display: flex;
-              gap: 4px;
-              margin-right: 4px;
-              opacity: 0;
-              transition: all 0.2s;
-            }
-            .caption-item:hover .tag-buttons {
-              opacity: 1;
-            }
-            .tag-btn {
-              background: transparent;
-              border: 1px solid transparent;
-              color: #858585;
-              cursor: pointer;
-              padding: 3px 6px;
-              border-radius: 3px;
-              font-size: 11px;
-              transition: all 0.2s;
-            }
-            .tag-btn:hover {
-              background: #3e3e42;
-              border-color: #858585;
-            }
-            .tag-btn.active {
-              background: #4ec9b0;
-              border-color: #4ec9b0;
-              color: #1e1e1e;
-            }
-            .tag-btn.tag-clear {
-              font-size: 10px;
-              padding: 2px 5px;
-            }
-            .tag-btn.tag-clear:hover {
-              background: #c5534b;
-              border-color: #c5534b;
-              color: white;
-            }
-            .caption-tag {
-              display: inline-block;
-              padding: 2px 6px;
-              border-radius: 3px;
-              font-size: 9px;
-              font-weight: 600;
-              text-transform: uppercase;
-              letter-spacing: 0.5px;
-              margin-right: 8px;
-            }
-            .caption-tag.tag-prophecy {
-              background: rgba(156, 39, 176, 0.3);
-              color: #ce93d8;
-            }
-            .caption-tag.tag-healing-declaration {
-              background: rgba(76, 175, 80, 0.3);
-              color: #81c784;
-            }
-            .caption-tag.tag-scripture {
-              background: rgba(33, 150, 243, 0.3);
-              color: #64b5f6;
-            }
-            .caption-tag.tag-ignore {
-              background: rgba(158, 158, 158, 0.3);
-              color: #bdbdbd;
-            }
-            .caption-tag.tag-person-call-out {
-              background: rgba(255, 152, 0, 0.3);
-              color: #ffb74d;
-            }
-            .caption-tag.tag-emphasis {
-              background: rgba(255, 235, 59, 0.3);
-              color: #fff59d;
-            }
-            .caption-tag.tag-POINT {
-              background: rgba(244, 67, 54, 0.3);
-              color: #ef5350;
-            }
-            .edit-btn, .replace-btn, .delete-btn {
-              background: transparent;
-              border: 1px solid transparent;
-              color: #858585;
-              cursor: pointer;
-              padding: 4px 8px;
-              border-radius: 3px;
-              font-size: 12px;
-              opacity: 0;
-              transition: all 0.2s;
-            }
-            .caption-item:hover .edit-btn,
-            .caption-item:hover .replace-btn,
-            .caption-item:hover .delete-btn {
-              opacity: 1;
-            }
-            .edit-btn:hover {
-              background: #3e3e42;
-              border-color: #4ec9b0;
-              color: #4ec9b0;
-            }
-            .replace-btn:hover {
-              background: #3e3e42;
-              border-color: #dcdcaa;
-              color: #dcdcaa;
-            }
-            .delete-btn:hover {
-              background: #3e3e42;
-              border-color: #f44336;
-              color: #f44336;
-            }
-            .caption-text {
-              color: #d4d4d4;
-              font-size: 14px;
-              line-height: 1.6;
-              min-height: 20px;
-              cursor: pointer;
-              word-wrap: break-word;
-              word-break: normal;
-              max-width: 100%;
-            }
-            .caption-text:hover {
-              background: rgba(78, 201, 176, 0.1);
-              border-radius: 3px;
-            }
-            .caption-text[contenteditable="true"] {
-              background: #1e1e1e;
-              padding: 8px;
-              border: 1px solid #4ec9b0;
-              border-radius: 3px;
-              outline: none;
-              cursor: text;
-            }
-            .caption-text[contenteditable="true"]:focus {
-              border-color: #5fd4c3;
-              box-shadow: 0 0 0 2px rgba(78, 201, 176, 0.2);
-            }
-            .edit-actions {
-              display: flex;
-              gap: 8px;
-              margin-top: 8px;
-              justify-content: flex-end;
-            }
-            .edit-actions button {
-              padding: 6px 12px;
-              border: none;
-              border-radius: 3px;
-              cursor: pointer;
-              font-size: 12px;
-              font-family: inherit;
-              transition: all 0.2s;
-            }
-            .save-btn {
-              background: #4ec9b0;
-              color: #1e1e1e;
-              font-weight: 600;
-            }
-            .save-btn:hover {
-              background: #5fd4c3;
-            }
-            .cancel-btn {
-              background: #3e3e42;
-              color: #d4d4d4;
-            }
-            .cancel-btn:hover {
-              background: #4a4a4f;
-            }
-            .edited-indicator {
-              display: inline-block;
-              margin-left: 8px;
-              color: #dcdcaa;
-              font-size: 10px;
-              font-weight: 600;
-            }
-            .no-captions {
-              color: #858585;
-              text-align: center;
-              padding: 60px 20px;
-              font-style: italic;
-              font-size: 13px;
-            }
             @media (max-width: 768px) {
-              body { padding: 10px; font-size: 11px; }
-              .header { margin: -10px -10px 10px -10px; }
+              body { padding: 12px; font-size: 14px; }
+              .header { margin: -12px -12px 12px -12px; padding: 12px; }
+              .caption-text, .queue-text { font-size: 15px; }
             }
           </style>
         </head>
         <body>
           <div class="header">
-            <h1>📝 Caption Transcript</h1>
+            <div class="header-row">
+              <h1>Caption Transcript</h1>
+              <div class="status-group">
+                <span class="live" title="Connection to the server"><span id="liveDot" class="live-dot"></span><span id="liveText">Connecting…</span></span>
+                <span id="waitingCounter" class="waiting-counter"></span>
+              </div>
             <div class="controls">
-              <select id="exportFormat" style="background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; padding: 5px 10px; border-radius: 3px; font-family: inherit; font-size: 12px;">
-                <option value="">📥 Export...</option>
+              <select id="exportFormat" title="Download the transcript">
+                <option value="">📥 Export…</option>
                 <option value="txt-with">TXT (with timestamps)</option>
                 <option value="txt-without">TXT (no timestamps)</option>
                 <option value="csv-with">CSV (with timestamps)</option>
@@ -1785,14 +1947,15 @@ app.get('/transcript', (req, res) => {
               <button class="danger" onclick="clearCaptions()">🗑️ Clear All</button>
               <button id="ytPauseBtn" class="yt-btn" onclick="toggleYoutubePause()" disabled title="Pause/resume sending captions to YouTube">📺 YouTube: …</button>
               <button id="rejectedBtn" class="rejected-btn" title="Lines you rejected (not in the transcript or exports)">🚫 Rejected (0)</button>
+              <button id="themeToggle" class="theme-btn" title="Switch between dark and light">☀️</button>
+            </div>
             </div>
             <div class="review-bar">
-              <span class="review-label">Mode:</span>
+              <span class="review-label">Mode</span>
               <div class="mode-switch" role="group" aria-label="Caption mode">
                 <button id="modeAutoBtn" class="mode-btn active" title="Lines go to phones and YouTube immediately">⚡ Auto</button>
                 <button id="modeVetoBtn" class="mode-btn" title="Lines wait 10 seconds so you can reject or fix them">⏳ Delay 10s</button>
               </div>
-              <span id="waitingCounter" class="waiting-counter"></span>
               <span id="reviewHint" class="review-hint" style="display: none;">Keys: Enter = send now · Delete = reject · E = edit (oldest waiting line)</span>
             </div>
             <div id="ytPausedBanner" class="yt-paused-banner" style="display: none;">
@@ -1808,6 +1971,7 @@ app.get('/transcript', (req, res) => {
             ${captionHTML}
           </div>
           <div id="queueContainer" class="queue-container"></div>
+          <button id="newLinesBtn" class="new-lines-btn" style="display: none;" onclick="scrollToBottom()">↓ new lines</button>
           <div id="rejectedModal" class="modal-backdrop" style="display: none;">
             <div class="modal" role="dialog" aria-labelledby="rejectedTitle">
               <div class="modal-header">
@@ -1855,6 +2019,44 @@ app.get('/transcript', (req, res) => {
               }
             }
 
+            // "↓ N new lines" button when new captions arrive while scrolled up
+            let newLinesSinceScroll = 0;
+            const newLinesBtn = document.getElementById('newLinesBtn');
+            function noteNewLine() {
+              if (isAtBottom()) return;
+              newLinesSinceScroll++;
+              newLinesBtn.textContent = '↓ ' + newLinesSinceScroll + ' new line' + (newLinesSinceScroll === 1 ? '' : 's');
+              newLinesBtn.style.display = '';
+            }
+            function clearNewLines() {
+              newLinesSinceScroll = 0;
+              newLinesBtn.style.display = 'none';
+            }
+
+            // Dark / light theme
+            const themeToggle = document.getElementById('themeToggle');
+            function renderThemeButton() {
+              const light = document.documentElement.getAttribute('data-theme') === 'light';
+              themeToggle.textContent = light ? '☾' : '☀️';
+              themeToggle.title = light ? 'Switch to dark' : 'Switch to light';
+            }
+            themeToggle.addEventListener('click', () => {
+              const light = document.documentElement.getAttribute('data-theme') === 'light';
+              if (light) document.documentElement.removeAttribute('data-theme');
+              else document.documentElement.setAttribute('data-theme', 'light');
+              try { localStorage.setItem('transcriptTheme', light ? 'dark' : 'light'); } catch (e) {}
+              renderThemeButton();
+            });
+            renderThemeButton();
+
+            // Live dot: is the page still receiving from the server?
+            const liveDot = document.getElementById('liveDot');
+            const liveText = document.getElementById('liveText');
+            function setLive(on) {
+              liveDot.className = 'live-dot ' + (on ? 'on' : 'off');
+              liveText.textContent = on ? 'Live' : 'Reconnecting…';
+            }
+
             // Track user scrolling
             window.addEventListener('scroll', () => {
               clearTimeout(scrollTimeout);
@@ -1865,6 +2067,7 @@ app.get('/transcript', (req, res) => {
               } else {
                 // User scrolled back to bottom, re-enable autoscroll
                 autoScrollEnabled = true;
+                clearNewLines();
               }
               
               // Mark as user scrolling
@@ -1938,7 +2141,7 @@ app.get('/transcript', (req, res) => {
               if (tag) {
                 const label = document.createElement('span');
                 label.className = 'caption-tag tag-' + tag.replace(/\\s+/g, '-');
-                label.textContent = '[' + tag + ']';
+                label.textContent = tag;
                 timeDiv.insertBefore(label, timeDiv.firstChild);
               }
 
@@ -2316,7 +2519,7 @@ app.get('/transcript', (req, res) => {
               
               // Get tag from caption (default to empty string)
               const tag = caption.tag || '';
-              const tagDisplay = tag ? \`<span class="caption-tag tag-\${tag.replace(/\\s+/g, '-')}">[\${tag}]</span>\` : '';
+              const tagDisplay = tag ? \`<span class="caption-tag tag-\${tag.replace(/\\s+/g, '-')}">\${tag}</span>\` : '';
 
               const captionDiv = document.createElement('div');
               captionDiv.className = 'caption-item';
@@ -2352,6 +2555,7 @@ app.get('/transcript', (req, res) => {
 
               // Smart auto-scroll to new caption (only if user is at bottom)
               smartScroll();
+              noteNewLine();
 
               // Update stats
               const stats = document.querySelector('.stats');
@@ -2363,8 +2567,13 @@ app.get('/transcript', (req, res) => {
               }
             };
 
+            eventSource.onopen = function() {
+              setLive(true);
+            };
+
             eventSource.onerror = function(err) {
               console.error('SSE Error:', err);
+              setLive(false);
               // Reconnection is automatic
             };
 
