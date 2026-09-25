@@ -800,24 +800,29 @@
       }
     }
 
-    /* ===== Theme polish (same palette as the audience page) ===== */
+    /* ===== Theme polish (audience-page palette, depth instead of borders) =====
+       Separation comes from four shades and soft shadows, not from lines:
+       page (darkest) < panel < card < control surfaces; inputs are inset (darker than their card). */
     :root {
       --bg: #0a0e14;
-      --surface: rgba(26, 35, 50, 0.72);
-      --surface-solid: #1a2332;
-      --inset: rgba(10, 14, 20, 0.6);
-      --line: rgba(255, 255, 255, 0.08);
-      --line-strong: rgba(255, 255, 255, 0.14);
+      --panel: #131a26;
+      --card: #1a2333;
+      --card-hover: #1f2a3c;
+      --inset: #0e141d;
+      --control: #243044;
+      --control-hover: #2c3a51;
       --text: #eef2f7;
       --text-2: #a8b4c8;
       --text-3: #6b7a95;
       --accent: #5b8def;
       --accent-2: #7ba3f5;
-      --accent-glow: rgba(91, 141, 239, 0.18);
+      --accent-glow: rgba(91, 141, 239, 0.22);
       --ok: #4caf50;
       --warn: #ff9800;
       --danger: #ef5350;
-      --shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+      --shadow-panel: 0 18px 50px rgba(0, 0, 0, 0.45);
+      --shadow-card: 0 6px 18px rgba(0, 0, 0, 0.28);
+      --shadow-pop: 0 20px 50px rgba(0, 0, 0, 0.55);
     }
     body {
       background: radial-gradient(1200px 600px at 15% -10%, rgba(91, 141, 239, 0.12), transparent 60%),
@@ -830,9 +835,9 @@
     .subtitle { color: var(--text-2); opacity: 1; }
 
     .container, .settings-sidebar {
-      background: var(--surface);
-      border: 1px solid var(--line);
-      box-shadow: var(--shadow);
+      background: var(--panel);
+      border: none;
+      box-shadow: var(--shadow-panel);
       border-radius: 18px;
     }
     .container::-webkit-scrollbar-thumb, .settings-content::-webkit-scrollbar-thumb {
@@ -843,21 +848,25 @@
       background: rgba(255, 255, 255, 0.22);
     }
     .container { scrollbar-color: rgba(255, 255, 255, 0.14) transparent; }
+    .container::-webkit-scrollbar-track, .settings-content::-webkit-scrollbar-track { background: transparent; }
     .settings-toggle-btn {
-      background: var(--surface-solid);
-      border-color: var(--line);
+      background: var(--card);
+      border: none;
       color: var(--text-2);
+      box-shadow: var(--shadow-card);
     }
-    .settings-toggle-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .settings-toggle-btn:hover { background: var(--accent); color: #fff; }
+    .settings-header { border-bottom: none; background: rgba(255, 255, 255, 0.025); }
+    .settings-title { color: var(--text); }
 
-    /* Navigation row (these are <button>s and <a>s; neutralise the global button rule) */
+    /* Navigation row */
     .nav-btn {
       flex: none;
       text-transform: none;
       letter-spacing: 0;
       padding: 10px 18px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--line-strong);
+      background: var(--control);
+      border: none;
       border-radius: 10px;
       color: var(--text);
       text-decoration: none;
@@ -865,20 +874,22 @@
       font-weight: 500;
       font-family: inherit;
       cursor: pointer;
-      transition: background 0.2s, border-color 0.2s, transform 0.2s;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+      transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
     }
     .nav-btn:hover {
-      background: var(--accent-glow) !important;
-      border-color: var(--accent) !important;
+      background: var(--control-hover) !important;
+      border-color: transparent !important;
       transform: translateY(-1px);
-      box-shadow: 0 4px 14px rgba(91, 141, 239, 0.18);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
     }
+    .nav-btn.nav-btn-active { background: rgba(76, 175, 80, 0.2) !important; border-color: transparent !important; color: #a9dfbf !important; }
+    .nav-btn.nav-btn-warning { background: rgba(239, 83, 80, 0.2) !important; border-color: transparent !important; color: #ff9b98 !important; }
     .yt-banner {
       margin: -8px auto 16px;
       max-width: 640px;
-      padding: 9px 14px;
-      background: rgba(239, 83, 80, 0.14);
-      border: 1px solid rgba(239, 83, 80, 0.55);
+      padding: 10px 14px;
+      background: rgba(239, 83, 80, 0.16);
       border-radius: 10px;
       color: #ff9b98;
       font-size: 13px;
@@ -886,26 +897,27 @@
       text-align: center;
     }
 
-    /* Cards and insets */
-    .status-card, .audience-card, .current-status, .soniox-status-box {
-      background: var(--inset);
-      border: 1px solid var(--line);
-      border-radius: 12px;
+    /* Cards inside the panels */
+    .status-card, .audience-card, .current-status, .soniox-status-box, .audio-visualization, .info-item {
+      background: var(--card);
+      border: none;
+      border-radius: 14px;
+      box-shadow: var(--shadow-card);
     }
-    .soniox-status-box { margin-bottom: 15px; padding: 12px; }
-    .audience-card-header { background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid var(--line); }
-    .audience-card-title, .settings-title, #currentStatusLabel, .stat-value { color: var(--text); }
-    .info-item { background: var(--inset); border: 1px solid var(--line); }
+    .soniox-status-box { margin-bottom: 15px; padding: 12px 14px; }
+    .audience-card-header { background: rgba(255, 255, 255, 0.03); border-bottom: none; }
+    .audience-card-title, #currentStatusLabel, .stat-value { color: var(--text); }
+    .current-status { background: var(--inset); box-shadow: none; }
+    .stats-row, .custom-message-section { border-top: none; padding-top: 12px; }
     .info-label, .setting-label, .device-selector label, .custom-message-label { color: var(--text-2); opacity: 1; }
+    .settings-section { border-bottom: none; margin-bottom: 26px; padding-bottom: 0; }
     .settings-section-title { color: var(--text-3); opacity: 1; font-size: 12px; letter-spacing: 0.8px; }
-    .settings-section { border-bottom-color: var(--line); }
-    .settings-header { border-bottom-color: var(--line); }
-    .audio-visualization { background: var(--inset); border: 1px solid var(--line); border-radius: 14px; }
-    .level-meter { background: rgba(10, 14, 20, 0.7); border: 1px solid var(--line); }
+    .level-meter { background: var(--inset); border: none; }
     .level-text { color: var(--text-2); }
     .audio-flow { color: var(--text-2); opacity: 1; }
     .audio-flow.warn { color: var(--danger); }
     .audio-flow.amber { color: var(--warn); }
+    .qr-container { box-shadow: var(--shadow-card); }
 
     /* Status dots: grey idle, green connected, red recording */
     .status-dot { background: var(--text-3); animation: none; }
@@ -914,32 +926,30 @@
     .soniox-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-3); }
     .status-text { color: var(--text); }
 
-    /* Inputs */
-    .device-selector select, .setting-input, .setting-select, .custom-message-input, .url-input, .color-picker {
+    /* Inputs: inset, no border, focus ring only */
+    .device-selector select, .setting-input, .setting-select, .custom-message-input, .url-input, .color-picker, .password-input {
       background: var(--inset);
-      border: 1px solid var(--line-strong);
+      border: none;
       color: var(--text);
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
     }
-    .setting-input:focus, .setting-select:focus, .custom-message-input:focus, .device-selector select:focus {
+    .setting-input:focus, .setting-select:focus, .custom-message-input:focus, .device-selector select:focus, .password-input:focus {
       outline: none;
-      background: rgba(10, 14, 20, 0.8);
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-glow);
+      background: var(--inset);
+      border: none;
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 3px var(--accent-glow);
     }
-    .device-selector select option, .setting-select option { background: var(--surface-solid); color: var(--text); }
-    .setting-input[type="range"] { background: rgba(255, 255, 255, 0.12); border: none; box-shadow: none; }
+    .device-selector select option, .setting-select option { background: var(--card); color: var(--text); }
+    .setting-input[type="range"] { background: rgba(255, 255, 255, 0.12); box-shadow: none; }
+    .setting-input[type="range"]:focus { box-shadow: none; }
     .setting-input[type="range"]::-webkit-slider-thumb { background: var(--accent); border: 2px solid #ffffff; }
     .setting-input[type="range"]::-moz-range-thumb { background: var(--accent); border: 2px solid #ffffff; }
     .setting-value { color: var(--text-2); opacity: 1; }
     .url-input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-2); }
+    .color-picker { box-shadow: none; }
 
-    /* Buttons: one primary (blue), stop (red outline), the rest quiet */
-    .controls button {
-      text-transform: none;
-      letter-spacing: 0;
-      font-size: 15px;
-      border-radius: 12px;
-    }
+    /* Buttons: one primary (blue), stop (red tint), the rest quiet */
+    .controls button { text-transform: none; letter-spacing: 0; font-size: 15px; border-radius: 12px; border: none; }
     .btn-start {
       background: linear-gradient(135deg, #5b8def 0%, #4c7ee0 100%);
       color: #ffffff;
@@ -950,99 +960,126 @@
       color: #ffffff;
       box-shadow: 0 8px 22px rgba(91, 141, 239, 0.38);
     }
-    .btn-stop {
-      background: rgba(239, 83, 80, 0.12);
-      color: #ff9b98;
-      border: 1px solid rgba(239, 83, 80, 0.5);
-    }
-    .btn-stop:hover:not(:disabled) {
-      background: var(--danger);
-      color: #ffffff;
-      border-color: var(--danger);
-      box-shadow: 0 6px 18px rgba(239, 83, 80, 0.3);
-    }
-    .btn-clear {
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--text);
-      border: 1px solid var(--line-strong);
-    }
-    .btn-clear:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 0.09);
-      color: var(--text);
-      border-color: rgba(255, 255, 255, 0.22);
-      box-shadow: none;
-    }
-    .refresh-btn, .reset-btn, .copy-btn, .action-btn, .status-btn, .password-submit {
-      text-transform: none;
-      letter-spacing: 0;
-    }
+    .btn-stop { background: rgba(239, 83, 80, 0.16); color: #ff9b98; border: none; }
+    .btn-stop:hover:not(:disabled) { background: var(--danger); color: #ffffff; box-shadow: 0 6px 18px rgba(239, 83, 80, 0.3); }
+    .btn-clear { background: var(--control); color: var(--text); border: none; }
+    .btn-clear:hover:not(:disabled) { background: var(--control-hover); color: var(--text); box-shadow: none; }
+    .refresh-btn, .reset-btn, .copy-btn, .action-btn, .status-btn, .password-submit { text-transform: none; letter-spacing: 0; }
     .refresh-btn, .reset-btn { flex: none; }
     .refresh-btn, .reset-btn, .copy-btn, .action-btn.secondary {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--line-strong);
+      background: var(--control);
+      border: none;
       color: var(--text);
     }
     .refresh-btn:hover, .reset-btn:hover, .copy-btn:hover, .action-btn.secondary:hover {
-      background: var(--accent-glow);
-      border-color: var(--accent);
+      background: var(--control-hover);
+      border-color: transparent;
       color: var(--text);
     }
+    .action-btn.danger { background: rgba(239, 83, 80, 0.16); border: none; color: #ff9b98; }
+    .action-btn.danger:hover { background: var(--danger); color: #fff; }
+    .status-btn { border: none; background: var(--control); }
+    .status-btn.starting-soon { background: rgba(255, 193, 7, 0.12); }
+    .status-btn.starting-soon:hover { background: rgba(255, 193, 7, 0.24); }
+    .status-btn.live { background: rgba(76, 175, 80, 0.12); }
+    .status-btn.live:hover { background: rgba(76, 175, 80, 0.24); }
+    .status-btn.paused { background: rgba(255, 152, 0, 0.12); }
+    .status-btn.paused:hover { background: rgba(255, 152, 0, 0.24); }
+    .status-btn.ended { background: rgba(158, 158, 158, 0.12); color: #c9c9c9; }
+    .status-btn.ended:hover { background: rgba(158, 158, 158, 0.22); }
     .soniox-btn {
       flex: 1;
       text-transform: none;
       letter-spacing: 0;
       padding: 12px;
+      border: none;
       border-radius: 10px;
       font-weight: 600;
       font-size: 13px;
       font-family: inherit;
       cursor: pointer;
-      transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+      transition: background 0.2s, box-shadow 0.2s;
     }
     .soniox-btn.primary {
       background: linear-gradient(135deg, #5b8def 0%, #4c7ee0 100%);
       color: #ffffff;
-      border: none;
       box-shadow: 0 4px 14px rgba(91, 141, 239, 0.25);
     }
     .soniox-btn.primary:hover:not(:disabled) { background: linear-gradient(135deg, #7ba3f5 0%, #5b8def 100%); }
-    .soniox-btn.secondary {
-      background: rgba(239, 83, 80, 0.12);
-      color: #ff9b98;
-      border: 1px solid rgba(239, 83, 80, 0.5);
-    }
+    .soniox-btn.secondary { background: rgba(239, 83, 80, 0.16); color: #ff9b98; }
     .soniox-btn.secondary:hover:not(:disabled) { background: var(--danger); color: #ffffff; }
     .soniox-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    /* Live viewer count in the status row */
+    /* Live viewer count + details popover */
+    .status-indicator { position: relative; }
     .viewer-pill {
       margin-left: auto;
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
+      padding: 7px 13px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--line-strong);
+      background: var(--control);
+      border: none;
       color: var(--text-2);
       font-size: 13px;
+      font-family: inherit;
       white-space: nowrap;
+      cursor: pointer;
+      flex: none;
+      text-transform: none;
+      letter-spacing: 0;
+      transition: background 0.2s;
     }
+    .viewer-pill:hover { background: var(--control-hover); }
     .viewer-pill strong { color: var(--text); font-size: 15px; }
-    .viewer-pill.active {
-      background: rgba(76, 175, 80, 0.12);
-      border-color: rgba(76, 175, 80, 0.45);
-      color: #a5d6a7;
-    }
+    .viewer-pill.active { background: rgba(76, 175, 80, 0.16); color: #a5d6a7; }
+    .viewer-pill.active:hover { background: rgba(76, 175, 80, 0.26); }
     .viewer-pill.active strong { color: #ffffff; }
+    .viewer-pop {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 10px);
+      width: 380px;
+      max-width: calc(100vw - 60px);
+      background: var(--card);
+      border-radius: 14px;
+      box-shadow: var(--shadow-pop);
+      padding: 14px 16px;
+      z-index: 500;
+      font-size: 13px;
+      color: var(--text-2);
+      text-align: left;
+    }
+    .viewer-pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+    .viewer-pop-head strong { color: var(--text); font-size: 16px; }
+    .viewer-pop-sub { color: var(--text-3); font-size: 12px; margin-bottom: 12px; }
+    .viewer-pop-section { color: var(--text-3); font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; margin: 12px 0 6px; }
+    .viewer-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: var(--inset);
+      margin-bottom: 6px;
+    }
+    .viewer-row .v-icon { font-size: 18px; width: 24px; text-align: center; }
+    .viewer-row .v-main { flex: 1; min-width: 0; }
+    .viewer-row .v-device { color: var(--text); font-weight: 500; }
+    .viewer-row .v-meta { color: var(--text-3); font-size: 12px; margin-top: 1px; }
+    .viewer-row .v-tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--control); color: var(--text-2); white-space: nowrap; }
+    .viewer-row .v-tag.re { background: rgba(255, 152, 0, 0.16); color: #ffcc80; }
+    .viewer-row .v-tag.new { background: rgba(76, 175, 80, 0.16); color: #a5d6a7; }
+    .viewer-row.left { opacity: 0.75; }
+    .viewer-pop-empty { color: var(--text-3); padding: 10px; text-align: center; background: var(--inset); border-radius: 10px; }
+    .viewer-pop-foot { margin-top: 10px; color: var(--text-3); font-size: 12px; }
 
     /* Password screen */
     .password-modal { background: rgba(10, 14, 20, 0.94); }
-    .password-box { background: var(--surface-solid); border: 1px solid var(--line); box-shadow: var(--shadow); }
+    .password-box { background: var(--panel); border: none; box-shadow: var(--shadow-panel); }
     .password-box h2 { color: #ffffff; }
     .password-box p { color: var(--text-2); }
-    .password-input { background: var(--inset); border: 1px solid var(--line-strong); color: var(--text); }
-    .password-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
     .password-submit { background: var(--accent); border: none; color: #ffffff; }
     .password-submit:hover { background: var(--accent-2); box-shadow: 0 6px 18px rgba(91, 141, 239, 0.3); }
   </style>
@@ -1400,7 +1437,8 @@
         <div class="status-indicator">
           <div id="statusDot" class="status-dot"></div>
           <span id="statusText" class="status-text">Connecting...</span>
-          <span id="viewerPill" class="viewer-pill" title="Phones currently connected to the audience page">👥 <strong id="viewerPillCount">0</strong> viewers</span>
+          <button id="viewerPill" class="viewer-pill" type="button" title="Phones connected to the audience page - click for details">👥 <strong id="viewerPillCount">0</strong><span id="viewerPillLabel">viewers</span></button>
+          <div id="viewerPop" class="viewer-pop" style="display: none;"></div>
         </div>
 
         <div class="device-selector">
@@ -2126,11 +2164,125 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       const n = Number(count) || 0;
       const pill = document.getElementById('viewerPill');
       document.getElementById('viewerPillCount').textContent = n;
-      pill.lastChild.textContent = n === 1 ? ' viewer' : ' viewers';
+      document.getElementById('viewerPillLabel').textContent = n === 1 ? 'viewer' : 'viewers';
       pill.classList.toggle('active', n > 0);
       const sidebar = document.getElementById('activeViewers');
       if (sidebar) sidebar.textContent = n;
+      if (viewerPopOpen) loadViewerDetails();
     }
+
+    // ----- viewer details popover -----
+    const viewerPop = document.getElementById('viewerPop');
+    let viewerPopOpen = false;
+    let viewerPopTimer = null;
+
+    function fmtAgo(ms) {
+      const s = Math.max(0, Math.round(ms / 1000));
+      if (s < 60) return 'just now';
+      const m = Math.floor(s / 60);
+      if (m < 60) return m + ' min ago';
+      const h = Math.floor(m / 60);
+      return h + 'h ' + (m % 60) + 'm ago';
+    }
+    function fmtDuration(seconds) {
+      const s = Math.max(0, Math.round(seconds));
+      if (s < 60) return s + ' s';
+      const m = Math.floor(s / 60);
+      if (m < 60) return m + ' min';
+      const h = Math.floor(m / 60);
+      return h + 'h ' + (m % 60) + 'm';
+    }
+    function deviceIcon(device) {
+      if (!device) return '❔';
+      if (device.type === 'phone') return '📱';
+      if (device.type === 'tablet') return '📟';
+      return '💻';
+    }
+    function deviceLabel(device) {
+      if (!device) return 'Unknown device';
+      return device.os + ' · ' + device.browser;
+    }
+    function el(tag, className, text) {
+      const e = document.createElement(tag);
+      if (className) e.className = className;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+    function viewerRow(v, now, left) {
+      const row = el('div', 'viewer-row' + (left ? ' left' : ''));
+      row.appendChild(el('span', 'v-icon', deviceIcon(v.device)));
+      const main = el('div', 'v-main');
+      main.appendChild(el('div', 'v-device', deviceLabel(v.device)));
+      const meta = left
+        ? 'stayed ' + fmtDuration(v.seconds) + ' · left ' + fmtAgo(now - v.leftAt)
+        : 'joined ' + fmtAgo(now - v.joinedAt) + (now - v.joinedAt >= 60000 ? ' · watching ' + fmtDuration((now - v.joinedAt) / 1000) : '');
+      main.appendChild(el('div', 'v-meta', meta));
+      row.appendChild(main);
+      if (!left) {
+        row.appendChild(v.reconnected
+          ? el('span', 'v-tag re', '↻ reconnected' + (v.reconnects > 1 ? ' ×' + v.reconnects : ''))
+          : el('span', 'v-tag new', 'new'));
+      }
+      return row;
+    }
+    function renderViewerDetails(data) {
+      const now = Date.now() + (data.serverNow ? data.serverNow - Date.now() : 0);
+      viewerPop.innerHTML = '';
+      const head = el('div', 'viewer-pop-head');
+      head.appendChild(el('strong', '', data.count + (data.count === 1 ? ' viewer now' : ' viewers now')));
+      viewerPop.appendChild(head);
+      const parts = [];
+      if (data.uniqueToday) parts.push(data.uniqueToday + ' different ' + (data.uniqueToday === 1 ? 'phone' : 'phones') + ' today');
+      if (data.reconnectedNow) parts.push(data.reconnectedNow + ' reconnected');
+      const dev = data.byDevice || {};
+      const devParts = [];
+      if (dev.phone) devParts.push(dev.phone + ' phone' + (dev.phone === 1 ? '' : 's'));
+      if (dev.tablet) devParts.push(dev.tablet + ' tablet' + (dev.tablet === 1 ? '' : 's'));
+      if (dev.laptop) devParts.push(dev.laptop + ' laptop' + (dev.laptop === 1 ? '' : 's'));
+      if (devParts.length) parts.push(devParts.join(', '));
+      viewerPop.appendChild(el('div', 'viewer-pop-sub', parts.join(' · ') || 'Nobody has opened the audience page yet'));
+
+      viewerPop.appendChild(el('div', 'viewer-pop-section', 'Connected now'));
+      if (data.viewers.length === 0) {
+        viewerPop.appendChild(el('div', 'viewer-pop-empty', 'No one connected'));
+      } else {
+        data.viewers.forEach(v => viewerPop.appendChild(viewerRow(v, now, false)));
+      }
+      if (data.left && data.left.length) {
+        viewerPop.appendChild(el('div', 'viewer-pop-section', 'Recently left'));
+        data.left.slice(0, 5).forEach(v => viewerPop.appendChild(viewerRow(v, now, true)));
+      }
+      if (data.avgStaySeconds) {
+        viewerPop.appendChild(el('div', 'viewer-pop-foot', 'Typical stay: ' + fmtDuration(data.avgStaySeconds) + ' (from ' + data.leftCount + ' who left)'));
+      }
+    }
+    async function loadViewerDetails() {
+      try {
+        const res = await fetch('/api/viewers');
+        renderViewerDetails(await res.json());
+      } catch (err) {
+        viewerPop.innerHTML = '';
+        viewerPop.appendChild(el('div', 'viewer-pop-empty', 'Could not load viewer details'));
+      }
+    }
+    function openViewerPop() {
+      viewerPopOpen = true;
+      viewerPop.style.display = '';
+      loadViewerDetails();
+      viewerPopTimer = setInterval(loadViewerDetails, 5000);
+    }
+    function closeViewerPop() {
+      viewerPopOpen = false;
+      viewerPop.style.display = 'none';
+      if (viewerPopTimer) { clearInterval(viewerPopTimer); viewerPopTimer = null; }
+    }
+    document.getElementById('viewerPill').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (viewerPopOpen) closeViewerPop(); else openViewerPop();
+    });
+    viewerPop.addEventListener('click', e => e.stopPropagation());
+    document.addEventListener('click', () => { if (viewerPopOpen) closeViewerPop(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && viewerPopOpen) closeViewerPop(); });
 
     function renderCaptionDisplayState(state) {
       captionDisplayEnabled = !!state.enabled;
@@ -3599,9 +3751,9 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
     // Warn before closing tab if Soniox is connected
     window.addEventListener('beforeunload', (e) => {
       // Check if Soniox is connected (via global status variables)
-      const isSonioxConnected = sonioxStatusText && 
-                                 (sonioxStatusText.textContent.includes('Connected') || 
-                                  sonioxStatusText.textContent.includes('Live'));
+      // ("Not Connected" also contains "Connected", so compare the whole text)
+      const statusNow = sonioxStatusText ? sonioxStatusText.textContent.trim() : '';
+      const isSonioxConnected = statusNow === 'Connected' || statusNow === 'Connecting...' || statusNow === 'Live';
       
       if (isSonioxConnected) {
         // Show browser warning

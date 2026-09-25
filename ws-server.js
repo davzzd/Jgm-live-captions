@@ -2707,6 +2707,7 @@ app.get('/audience/stream', (req, res) => {
 
   // Add client to set
   audienceSSEClients.add(res);
+  registerViewer(res, req);
 
   console.log(`👥 Audience viewer connected (${audienceSSEClients.size} total)`);
   broadcastViewerCount();
@@ -2784,6 +2785,7 @@ app.get('/audience/stream', (req, res) => {
   req.on('close', () => {
     clearInterval(heartbeat);
     audienceSSEClients.delete(res);
+    unregisterViewer(res);
     console.log(`👥 Audience viewer disconnected (${audienceSSEClients.size} remaining)`);
     broadcastViewerCount();
   });
@@ -2866,6 +2868,104 @@ function viewerCountState() {
   return { type: 'viewer_count', count: audienceSSEClients.size };
 }
 
+// ===== AUDIENCE VIEWER DETAILS (for the admin page's viewer popover) =====
+// Nothing here identifies a person: a random per-browser ID, the device type from the
+// user-agent string, and join/leave times.
+const activeViewerRecords = new Map(); // res -> { viewerId, joinedAt, device, reconnected, reconnects }
+const viewerHistory = new Map();       // viewerId -> { firstSeen, lastSeen, sessions }
+const recentLeavers = [];              // newest first, capped
+const completedStays = [];             // seconds, capped
+const VIEWER_HISTORY_MAX_AGE_MS = 12 * 3600 * 1000;
+let viewerCounter = 0;
+
+/**
+ * Rough device description from a user-agent string (phone/tablet/laptop, OS, browser)
+ */
+function describeDevice(ua) {
+  const u = String(ua || '');
+  let type = 'laptop';
+  let os = 'Other';
+  if (/iPhone/.test(u)) { os = 'iPhone'; type = 'phone'; }
+  else if (/iPad/.test(u)) { os = 'iPad'; type = 'tablet'; }
+  else if (/Android/.test(u)) { os = 'Android'; type = /Mobile/.test(u) ? 'phone' : 'tablet'; }
+  else if (/Windows/.test(u)) os = 'Windows';
+  else if (/Macintosh|Mac OS X/.test(u)) os = 'Mac';
+  else if (/CrOS/.test(u)) os = 'ChromeOS';
+  else if (/Linux/.test(u)) os = 'Linux';
+  let browser = 'Other';
+  if (/Edg\//.test(u)) browser = 'Edge';
+  else if (/OPR\//.test(u)) browser = 'Opera';
+  else if (/SamsungBrowser/.test(u)) browser = 'Samsung';
+  else if (/Chrome\//.test(u) || /CriOS/.test(u)) browser = 'Chrome';
+  else if (/Firefox\//.test(u) || /FxiOS/.test(u)) browser = 'Firefox';
+  else if (/Safari\//.test(u)) browser = 'Safari';
+  return { type, os, browser };
+}
+
+function pruneViewerHistory(now) {
+  viewerHistory.forEach((h, id) => {
+    if (now - h.lastSeen > VIEWER_HISTORY_MAX_AGE_MS) viewerHistory.delete(id);
+  });
+}
+
+function registerViewer(res, req) {
+  const now = Date.now();
+  pruneViewerHistory(now);
+  const vid = typeof req.query.vid === 'string' && /^[a-z0-9]{6,32}$/i.test(req.query.vid) ? req.query.vid : null;
+  const known = vid ? viewerHistory.get(vid) : null;
+  const record = {
+    id: ++viewerCounter,
+    viewerId: vid,
+    joinedAt: now,
+    device: describeDevice(req.headers['user-agent']),
+    reconnected: !!known,
+    reconnects: known ? known.sessions : 0
+  };
+  if (vid) {
+    viewerHistory.set(vid, { firstSeen: known ? known.firstSeen : now, lastSeen: now, sessions: (known ? known.sessions : 0) + 1 });
+  }
+  activeViewerRecords.set(res, record);
+}
+
+function unregisterViewer(res) {
+  const record = activeViewerRecords.get(res);
+  if (!record) return;
+  activeViewerRecords.delete(res);
+  const now = Date.now();
+  const seconds = (now - record.joinedAt) / 1000;
+  if (record.viewerId && viewerHistory.has(record.viewerId)) viewerHistory.get(record.viewerId).lastSeen = now;
+  recentLeavers.unshift({ device: record.device, joinedAt: record.joinedAt, leftAt: now, seconds });
+  if (recentLeavers.length > 30) recentLeavers.length = 30;
+  if (seconds >= 5) { // ignore instant reloads
+    completedStays.push(seconds);
+    if (completedStays.length > 200) completedStays.shift();
+  }
+}
+
+function viewerDetails() {
+  const now = Date.now();
+  pruneViewerHistory(now);
+  const viewers = Array.from(activeViewerRecords.values())
+    .sort((a, b) => a.joinedAt - b.joinedAt)
+    .map(v => ({ joinedAt: v.joinedAt, seconds: (now - v.joinedAt) / 1000, device: v.device, reconnected: v.reconnected, reconnects: v.reconnects }));
+  const byDevice = { phone: 0, tablet: 0, laptop: 0 };
+  viewers.forEach(v => { byDevice[v.device.type] = (byDevice[v.device.type] || 0) + 1; });
+  const avgStaySeconds = completedStays.length
+    ? completedStays.reduce((a, b) => a + b, 0) / completedStays.length
+    : 0;
+  return {
+    serverNow: now,
+    count: viewers.length,
+    viewers,
+    uniqueToday: viewerHistory.size,
+    reconnectedNow: viewers.filter(v => v.reconnected).length,
+    byDevice,
+    left: recentLeavers.slice(0, 10),
+    leftCount: completedStays.length,
+    avgStaySeconds
+  };
+}
+
 /**
  * Tell every admin page how many phones are connected (sent on each viewer connect/disconnect)
  */
@@ -2898,6 +2998,10 @@ function broadcastControlState() {
     }
   });
 }
+
+app.get('/api/viewers', (req, res) => {
+  res.json(viewerDetails());
+});
 
 app.get('/api/youtube-status', (req, res) => {
   res.json(youtubeState());
