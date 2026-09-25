@@ -3,3 +3,5 @@ node_modules/
 *.log
 .DS_Store
 
+caption-queue.json
+rejected-captions.json

@@ -17,6 +17,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const { CaptionSegmenter, sanitizeCaptionText } = require('./segmenter');
+const { CaptionQueue } = require('./caption-queue');
 
 // Load .env file from the same directory as this script
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -304,7 +305,11 @@ class YouTubeCaptionPublisher {
     this.sequenceNumber = 0; // YouTube requires incremental sequence numbers
   }
 
-  async publish(caption) {
+  /**
+   * @param {string} caption
+   * @param {number} [spokenAt] - ms timestamp the line belongs to (YouTube aligns it to the video)
+   */
+  async publish(caption, spokenAt) {
     if (!this.enabled || !caption) {
       return;
     }
@@ -335,7 +340,7 @@ class YouTubeCaptionPublisher {
       urlWithParams = `${this.postUrl}${this.postUrl.includes('?') ? '&' : '?'}seq=${this.sequenceNumber}&lang=${this.language}`;
 
       // Generate timestamp in UTC format: YYYY-MM-DDTHH:MM:SS.mmm
-      const now = new Date();
+      const now = spokenAt ? new Date(spokenAt) : new Date();
       timestamp = now.toISOString().replace('Z', '').substring(0, 23); // Remove 'Z' and keep milliseconds
 
       // Clean caption text - YouTube expects clean text
@@ -1254,6 +1259,241 @@ app.get('/transcript', (req, res) => {
               color: #858585;
               cursor: default;
             }
+            .rejected-btn {
+              background: #3c3c3c !important;
+            }
+            .review-bar {
+              display: flex;
+              gap: 10px;
+              align-items: center;
+              flex-wrap: wrap;
+              margin-top: 10px;
+              font-size: 12px;
+            }
+            .review-label {
+              color: #9cdcfe;
+            }
+            .mode-switch {
+              display: inline-flex;
+              border: 1px solid #555;
+              border-radius: 4px;
+              overflow: hidden;
+            }
+            .mode-btn {
+              background: #3c3c3c;
+              color: #d4d4d4;
+              border: none;
+              padding: 6px 12px;
+              font-family: inherit;
+              font-size: 12px;
+              cursor: pointer;
+            }
+            .mode-btn + .mode-btn {
+              border-left: 1px solid #555;
+            }
+            .mode-btn.active {
+              background: #0e639c;
+              color: #fff;
+              font-weight: bold;
+            }
+            .mode-btn.active.veto {
+              background: #b5890a;
+            }
+            .waiting-counter {
+              color: #dcdcaa;
+              font-weight: bold;
+            }
+            .waiting-counter.alert {
+              color: #f48771;
+            }
+            .review-hint {
+              color: #858585;
+            }
+            .queue-container:empty {
+              display: none;
+            }
+            .queue-container {
+              margin-top: 12px;
+            }
+            .queue-item {
+              padding: 12px;
+              border-left: 3px solid #d7ba7d;
+              margin-bottom: 12px;
+              background: #2d2a22;
+              border-radius: 3px;
+            }
+            .queue-item.nudge {
+              outline: 2px solid #f48771;
+            }
+            .queue-item.editing {
+              background: #3a3a3d;
+              border-left-color: #dcdcaa;
+            }
+            .queue-item.blocked {
+              border-left-color: #858585;
+            }
+            .queue-meta {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              gap: 10px;
+              margin-bottom: 6px;
+              font-size: 11px;
+              color: #858585;
+            }
+            .queue-status {
+              color: #d7ba7d;
+              font-weight: bold;
+            }
+            .queue-status.warn {
+              color: #f48771;
+            }
+            .queue-text {
+              color: #d4d4d4;
+              font-size: 14px;
+              line-height: 1.6;
+              word-wrap: break-word;
+            }
+            .queue-edit-input {
+              width: 100%;
+              background: #1e1e1e;
+              color: #d4d4d4;
+              border: 1px solid #dcdcaa;
+              border-radius: 3px;
+              padding: 8px;
+              font-family: inherit;
+              font-size: 14px;
+              line-height: 1.6;
+              resize: vertical;
+            }
+            .queue-bar {
+              height: 4px;
+              background: #3e3e42;
+              border-radius: 2px;
+              overflow: hidden;
+              margin: 8px 0;
+            }
+            .queue-bar-fill {
+              height: 100%;
+              background: #d7ba7d;
+              width: 100%;
+            }
+            .queue-actions {
+              display: flex;
+              gap: 8px;
+              flex-wrap: wrap;
+            }
+            .queue-actions button {
+              background: #3c3c3c;
+              color: #d4d4d4;
+              border: 1px solid #555;
+              padding: 6px 12px;
+              border-radius: 3px;
+              cursor: pointer;
+              font-family: inherit;
+              font-size: 12px;
+            }
+            .queue-actions button:hover:not(:disabled) {
+              border-color: #d7ba7d;
+            }
+            .queue-actions button.send {
+              background: #0e639c;
+              border-color: #0e639c;
+              color: #fff;
+            }
+            .queue-actions button.reject {
+              background: #6b2b26;
+              border-color: #c5534b;
+              color: #fff;
+            }
+            .queue-actions button:disabled {
+              opacity: 0.4;
+              cursor: default;
+            }
+            .modal-backdrop {
+              position: fixed;
+              inset: 0;
+              background: rgba(0, 0, 0, 0.6);
+              z-index: 1000;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 20px;
+            }
+            .modal {
+              background: #252526;
+              border: 1px solid #3e3e42;
+              border-radius: 6px;
+              width: min(720px, 100%);
+              max-height: 80vh;
+              display: flex;
+              flex-direction: column;
+            }
+            .modal-header {
+              padding: 15px;
+              border-bottom: 1px solid #3e3e42;
+            }
+            .modal-header h2 {
+              color: #f48771;
+              font-size: 16px;
+              margin-bottom: 4px;
+            }
+            .modal-note {
+              color: #858585;
+              font-size: 11px;
+            }
+            .rejected-list {
+              padding: 10px 15px;
+              overflow-y: auto;
+              flex: 1;
+            }
+            .rejected-item {
+              display: flex;
+              gap: 10px;
+              align-items: flex-start;
+              padding: 8px 0;
+              border-bottom: 1px solid #3e3e42;
+              font-size: 13px;
+            }
+            .rejected-item .rejected-time {
+              color: #858585;
+              white-space: nowrap;
+              font-size: 11px;
+              padding-top: 2px;
+            }
+            .rejected-item .rejected-text {
+              flex: 1;
+              color: #d4d4d4;
+              word-wrap: break-word;
+            }
+            .rejected-item button, .modal-actions button {
+              background: #3c3c3c;
+              color: #d4d4d4;
+              border: 1px solid #555;
+              padding: 4px 10px;
+              border-radius: 3px;
+              cursor: pointer;
+              font-family: inherit;
+              font-size: 12px;
+            }
+            .modal-actions {
+              display: flex;
+              justify-content: flex-end;
+              gap: 10px;
+              padding: 12px 15px;
+              border-top: 1px solid #3e3e42;
+            }
+            .modal-actions button.danger {
+              background: #6b2b26;
+              border-color: #c5534b;
+              color: #fff;
+            }
+            .rejected-empty {
+              color: #858585;
+              font-style: italic;
+              padding: 20px 0;
+              text-align: center;
+            }
             .yt-paused-banner {
               margin-top: 10px;
               padding: 8px 12px;
@@ -1541,6 +1781,16 @@ app.get('/transcript', (req, res) => {
               <button onclick="scrollToBottom()">⬇️ Latest</button>
               <button class="danger" onclick="clearCaptions()">🗑️ Clear All</button>
               <button id="ytPauseBtn" class="yt-btn" onclick="toggleYoutubePause()" disabled title="Pause/resume sending captions to YouTube">📺 YouTube: …</button>
+              <button id="rejectedBtn" class="rejected-btn" title="Lines you rejected (not in the transcript or exports)">🚫 Rejected (0)</button>
+            </div>
+            <div class="review-bar">
+              <span class="review-label">Mode:</span>
+              <div class="mode-switch" role="group" aria-label="Caption mode">
+                <button id="modeAutoBtn" class="mode-btn active" title="Lines go to phones and YouTube immediately">⚡ Auto</button>
+                <button id="modeVetoBtn" class="mode-btn" title="Lines wait 10 seconds so you can reject or fix them">⏳ Delay 10s</button>
+              </div>
+              <span id="waitingCounter" class="waiting-counter"></span>
+              <span id="reviewHint" class="review-hint" style="display: none;">Keys: Enter = send now · Delete = reject · E = edit (oldest waiting line)</span>
             </div>
             <div id="ytPausedBanner" class="yt-paused-banner" style="display: none;">
               ⏸️ YouTube captions are PAUSED — lines appear here and on phones but are not sent to YouTube
@@ -1553,6 +1803,20 @@ app.get('/transcript', (req, res) => {
           </div>
           <div class="content" id="captionsContainer">
             ${captionHTML}
+          </div>
+          <div id="queueContainer" class="queue-container"></div>
+          <div id="rejectedModal" class="modal-backdrop" style="display: none;">
+            <div class="modal" role="dialog" aria-labelledby="rejectedTitle">
+              <div class="modal-header">
+                <h2 id="rejectedTitle">🚫 Rejected lines</h2>
+                <span class="modal-note">Not in the transcript or exports. Copy a line if you want to add it back by editing an existing line.</span>
+              </div>
+              <div id="rejectedList" class="rejected-list"></div>
+              <div class="modal-actions">
+                <button id="rejectedClearBtn" class="danger">🧹 Clear list</button>
+                <button id="rejectedCloseBtn">Close</button>
+              </div>
+            </div>
           </div>
           <script>
             // Fix server-rendered timestamps to match client locale/timezone
@@ -1661,6 +1925,38 @@ app.get('/transcript', (req, res) => {
               }
             }
 
+            // Show a tag change on a transcript line without reloading the page
+            function applyTagToItem(captionItem, tag) {
+              captionItem.setAttribute('data-tag', tag);
+
+              const timeDiv = captionItem.querySelector('.caption-time');
+              const oldLabel = timeDiv.querySelector('.caption-tag');
+              if (oldLabel) oldLabel.remove();
+              if (tag) {
+                const label = document.createElement('span');
+                label.className = 'caption-tag tag-' + tag.replace(/\\s+/g, '-');
+                label.textContent = '[' + tag + ']';
+                timeDiv.insertBefore(label, timeDiv.firstChild);
+              }
+
+              const tagButtons = captionItem.querySelector('.tag-buttons');
+              tagButtons.querySelectorAll('.tag-btn').forEach(btn => {
+                const match = (btn.getAttribute('onclick') || '').match(/setTag\\(this, '([^']*)'\\)/);
+                btn.classList.toggle('active', !!match && match[1] === tag && tag !== '');
+              });
+              let clearBtn = tagButtons.querySelector('.tag-clear');
+              if (tag && !clearBtn) {
+                clearBtn = document.createElement('button');
+                clearBtn.className = 'tag-btn tag-clear';
+                clearBtn.title = 'Remove tag';
+                clearBtn.textContent = '✕';
+                clearBtn.setAttribute('onclick', "setTag(this, '')");
+                tagButtons.appendChild(clearBtn);
+              } else if (!tag && clearBtn) {
+                clearBtn.remove();
+              }
+            }
+
             // Tag management function
             function setTag(button, tag) {
               const captionItem = button.closest('.caption-item');
@@ -1680,8 +1976,8 @@ app.get('/transcript', (req, res) => {
               .then(res => res.json())
               .then(data => {
                 if (data.success) {
-                  // Reload page to show updated tag
-                  location.reload();
+                  // Update the line in place (no reload, so live review isn't interrupted)
+                  applyTagToItem(captionItem, tag);
                 } else {
                   alert('Failed to update tag: ' + (data.error || 'Unknown error'));
                 }
@@ -1999,6 +2295,10 @@ app.get('/transcript', (req, res) => {
                 renderYoutubeState(caption);
                 return;
               }
+              if (caption.type === 'queue') {
+                if (window.renderQueueState) window.renderQueueState(caption);
+                return;
+              }
               const container = document.getElementById('captionsContainer');
 
               // Remove "no captions" message if present
@@ -2067,6 +2367,7 @@ app.get('/transcript', (req, res) => {
 
 
           </script>
+          <script src="/transcript-review.js"></script>
         </body>
       </html>
     `;
@@ -2087,6 +2388,13 @@ app.post('/transcript/clear', (req, res) => {
     // Also clear in-memory history
     captionHistory.length = 0;
     audienceCaptionBuffer = [];
+
+    // ...and the review queue and the rejected lines list
+    captionQueue.clear();
+    rejectedCaptions = [];
+    saveQueueState();
+    saveRejectedCaptions();
+    broadcastQueueState();
 
     // Broadcast clear event to all audience viewers
     const clearEvent = JSON.stringify({ type: 'clear' });
@@ -2332,6 +2640,7 @@ app.get('/transcript/stream', (req, res) => {
   // Send initial heartbeat and current YouTube state (also re-syncs after a reconnect)
   res.write(': heartbeat\n\n');
   res.write(`data: ${JSON.stringify(youtubeState())}\n\n`);
+  res.write(`data: ${JSON.stringify(queueState())}\n\n`);
 
   // Keep connection alive with periodic heartbeats
   const heartbeat = setInterval(() => {
@@ -2502,29 +2811,6 @@ app.post('/api/audience-status', (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing status or message' });
   }
 
-  // Clear old captions when service is starting (fresh start for new service)
-  if (status === 'starting_soon') {
-    try {
-      fs.writeFileSync(CAPTIONS_LOG_FILE, '', 'utf8');
-      captionHistory.length = 0; // Clear in-memory history
-      audienceCaptionBuffer = []; // Clear audience buffer
-
-      // Broadcast clear event to all audience viewers
-      const clearEvent = JSON.stringify({ type: 'clear' });
-      audienceSSEClients.forEach(client => {
-        try {
-          client.write(`data: ${clearEvent}\n\n`);
-        } catch (error) {
-          // Client disconnected
-        }
-      });
-
-      console.log('🧹 Cleared old captions for new service');
-    } catch (error) {
-      console.error('Failed to clear captions:', error);
-    }
-  }
-
   // Clear captions when service ends (not when paused)
   if (status === 'ended') {
     try {
@@ -2648,12 +2934,97 @@ app.post('/api/caption-display', (req, res) => {
   res.json({ success: true, ...captionDisplayState() });
 });
 
+// ===== CAPTION REVIEW (transcript page) =====
+
+function queueResult(res, result, logMessage) {
+  if (!result.ok) {
+    return res.status(409).json({ success: false, error: result.error });
+  }
+  if (logMessage) logger.info(logMessage);
+  saveQueueState();
+  broadcastQueueState();
+  res.json({ success: true });
+}
+
+app.get('/api/queue', (req, res) => {
+  res.json(queueState());
+});
+
+/**
+ * Switch between 'auto' (send at once) and 'veto' (10s review delay)
+ */
+app.post('/api/caption-mode', (req, res) => {
+  const { mode } = req.body;
+  if (mode !== 'auto' && mode !== 'veto') {
+    return res.status(400).json({ success: false, error: "mode must be 'auto' or 'veto'" });
+  }
+  if (captionQueue.setMode(mode, Date.now())) {
+    logger.info(mode === 'veto'
+      ? `⏳ Caption review ON: lines wait ${REVIEW_DELAY_MS / 1000}s before going to phones and YouTube`
+      : '⚡ Caption review OFF: lines are sent immediately');
+  }
+  saveQueueState();
+  broadcastQueueState();
+  res.json({ success: true, mode: captionQueue.mode });
+});
+
+app.post('/api/queue/send-now', (req, res) => {
+  queueResult(res, captionQueue.sendNow(req.body.id, Date.now()));
+});
+
+app.post('/api/queue/reject', (req, res) => {
+  const result = captionQueue.reject(req.body.id, Date.now());
+  if (result.ok) {
+    rejectedCaptions.push({ timestamp: result.item.id, text: result.item.text, rejectedAt: new Date().toISOString() });
+    saveRejectedCaptions();
+  }
+  queueResult(res, result, result.ok ? `🚫 Line rejected: "${result.item.text.substring(0, 60)}"` : null);
+});
+
+/**
+ * Edit a waiting line. action: 'start' | 'renew' | 'save' | 'cancel'
+ * The page renews while the editor is open; an abandoned edit expires and the original is sent.
+ */
+app.post('/api/queue/edit', (req, res) => {
+  const { id, action } = req.body;
+  const now = Date.now();
+  let result;
+  if (action === 'start') result = captionQueue.startEdit(id, now);
+  else if (action === 'renew') result = captionQueue.renewEdit(id, now);
+  else if (action === 'save') result = captionQueue.saveEdit(id, sanitizeCaptionText(req.body.text), now);
+  else if (action === 'cancel') result = captionQueue.cancelEdit(id, now);
+  else return res.status(400).json({ success: false, error: 'Unknown action' });
+
+  if (action === 'renew' && result.ok) {
+    return res.json({ success: true }); // no state change worth broadcasting
+  }
+  queueResult(res, result, action === 'save' && result.ok ? `✏️ Line edited before sending: "${sanitizeCaptionText(req.body.text).substring(0, 60)}"` : null);
+});
+
+app.get('/api/rejected', (req, res) => {
+  res.json({ success: true, lines: rejectedCaptions });
+});
+
+/**
+ * Empty the Rejected popup (doesn't touch the transcript or anything live)
+ */
+app.post('/api/rejected/clear', (req, res) => {
+  rejectedCaptions = [];
+  saveRejectedCaptions();
+  broadcastQueueState();
+  res.json({ success: true });
+});
+
 /**
  * Static assets. Only the logo is served; serving the whole directory would expose
  * server.log (contains connection details), captions.log and the source code.
  */
 app.get('/Logo.png', (req, res) => {
   res.sendFile(path.join(__dirname, 'Logo.png'));
+});
+
+app.get('/transcript-review.js', (req, res) => {
+  res.sendFile(path.join(__dirname, 'transcript-review.js'));
 });
 
 // Helper function to escape HTML
@@ -3031,20 +3402,123 @@ function emitSegment(segment) {
   const confidence = avgConfidence != null ? ` ${(avgConfidence * 100).toFixed(1)}%` : '';
   logger.info(`📝 Caption [${source}/${reason}]${confidence}: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
 
-  // One timestamp shared by captions.log and the audience buffer: it is the caption's ID
-  // for edit/delete, and the audience page dedupes by it
+  // The timestamp is the caption's ID (edit/delete, audience de-duplication) and its spoken time
   const timestamp = nextCaptionTimestamp();
-  logCaption(text, true, '', timestamp);
-  broadcastToAudience(text, true, timestamp);
+  captionQueue.add({ id: timestamp, text, createdAt: Date.parse(timestamp) }, Date.now());
+  saveQueueState();
+  broadcastQueueState();
+}
+
+// ===== CAPTION REVIEW QUEUE =====
+// Every finished line goes through the queue. In 'auto' mode it is sent at once; in 'veto'
+// mode it waits REVIEW_DELAY_MS so the operator can reject or fix it first.
+
+const REVIEW_DELAY_MS = 10000;
+// YouTube ignores caption timestamps that are too old (reportedly ~60s); skip rather than send late
+const YOUTUBE_MAX_CAPTION_AGE_MS = 55000;
+const QUEUE_STATE_FILE = path.join(__dirname, 'caption-queue.json');
+const REJECTED_FILE = path.join(__dirname, 'rejected-captions.json');
+
+/**
+ * Send one approved line to the transcript, phones and YouTube.
+ */
+function sendApprovedCaption(item, now) {
+  logCaption(item.text, true, '', item.id);
+  broadcastToAudience(item.text, true, item.id);
+
+  if (!youtubePublisher.enabled) return;
   if (youtubePaused) {
     // Dropped, not queued: sent later they would be out of sync (or too old for YouTube)
-    if (youtubePublisher.enabled) youtubeSkippedWhilePaused++;
+    youtubeSkippedWhilePaused++;
     return;
   }
-  youtubePublisher.publish(text).catch(() => {
+  const age = now - item.createdAt;
+  if (age > YOUTUBE_MAX_CAPTION_AGE_MS) {
+    logger.warn(`📺 Not sent to YouTube (line is ${Math.round(age / 1000)}s old, too late for the stream): "${item.text.substring(0, 60)}"`);
+    return;
+  }
+  youtubePublisher.publish(item.text, item.createdAt).catch(() => {
     // Error already logged in publish method
   });
 }
+
+const captionQueue = new CaptionQueue({
+  mode: 'auto', // default when the server starts
+  delayMs: REVIEW_DELAY_MS,
+  onSend: sendApprovedCaption,
+  onEditExpired: item => {
+    logger.warn(`✏️ Edit abandoned (page closed?) - sending original line: "${item.text.substring(0, 60)}"`);
+  }
+});
+
+let rejectedCaptions = []; // [{ timestamp, text, rejectedAt }] - only shown in the transcript's Rejected popup
+
+function readJsonFile(file, fallback) {
+  try {
+    if (!fs.existsSync(file)) return fallback;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    logger.error(`Could not read ${path.basename(file)}:`, error.message);
+    return fallback;
+  }
+}
+
+function writeJsonFile(file, data) {
+  try {
+    fs.writeFileSync(file, JSON.stringify(data));
+  } catch (error) {
+    logger.error(`Could not save ${path.basename(file)}:`, error.message);
+  }
+}
+
+function saveQueueState() {
+  writeJsonFile(QUEUE_STATE_FILE, captionQueue.serialize());
+}
+
+function saveRejectedCaptions() {
+  writeJsonFile(REJECTED_FILE, rejectedCaptions);
+}
+
+function queueState() {
+  return {
+    type: 'queue',
+    ...captionQueue.snapshot(Date.now()),
+    rejectedCount: rejectedCaptions.length
+  };
+}
+
+function broadcastQueueState() {
+  const data = `data: ${JSON.stringify(queueState())}\n\n`;
+  transcriptSSEClients.forEach(client => {
+    try {
+      client.write(data);
+    } catch (error) {
+      transcriptSSEClients.delete(client);
+    }
+  });
+}
+
+function processCaptionQueue() {
+  const hadItems = captionQueue.items.length;
+  const sent = captionQueue.process(Date.now());
+  if (sent > 0 || captionQueue.items.length !== hadItems) {
+    saveQueueState();
+    broadcastQueueState();
+  }
+}
+
+// Restore after a restart: lines that were waiting are sent right away; rejected list is kept
+rejectedCaptions = readJsonFile(REJECTED_FILE, []);
+{
+  const savedQueue = readJsonFile(QUEUE_STATE_FILE, []);
+  if (savedQueue.length > 0) {
+    captionQueue.restore(savedQueue, Date.now());
+    const sent = captionQueue.flushAll(Date.now());
+    logger.info(`📨 Sent ${sent} line(s) that were waiting for review before the restart`);
+    saveQueueState();
+  }
+}
+setInterval(processCaptionQueue, 250);
 
 function emitSegments(session, segments) {
   segments.forEach(emitSegment);
