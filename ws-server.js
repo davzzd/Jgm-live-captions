@@ -247,7 +247,7 @@ let sessionCounter = 0;
 const KEEPALIVE_IDLE_MS = 10000;
 const KEEPALIVE_CHECK_MS = 5000;
 const SEGMENTER_TICK_MS = 250;
-const GRACEFUL_END_TIMEOUT_MS = 2000;
+const GRACEFUL_END_TIMEOUT_MS = 5000; // Soniox needs a few seconds to send the last words after the end frame
 
 // Language hints for auto-detect mode (hints bias recognition, they don't restrict it)
 const AUTO_LANGUAGE_HINTS = (process.env.SONIOX_AUTO_HINTS || 'ml,en,hi,ta,kn,te')
@@ -3091,7 +3091,7 @@ wssClients.on('connection', (ws) => {
   }, 1000);
 
   /**
-   * Forward one PCM chunk (s16le, 16 kHz, mono) to Soniox. Returns true if it was sent.
+   * Forward one PCM chunk (s16le, 16 kHz, mono) to Soniox, if it is connected.
    */
   const forwardAudio = (audioData) => {
     audioStats.bytes += audioData.length;
@@ -3109,7 +3109,6 @@ wssClients.on('connection', (ws) => {
         if (Math.random() < 0.01) {
           console.log(`📤 Sending audio chunk: ${audioData.length} bytes (configured: ${isSonioxConfigured})`);
         }
-        return true;
       } catch (error) {
         if (Math.random() < 0.001) {
           console.error('❌ Error sending audio to Soniox:', error.message);
@@ -3119,7 +3118,6 @@ wssClients.on('connection', (ws) => {
       // Not connected (or reconnecting) - audio is dropped until the connection is back
       console.warn('⚠️ Cannot send audio - Soniox not connected');
     }
-    return false;
   };
 
   // Don't auto-connect to Soniox - wait for user to start connection via UI

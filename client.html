@@ -2052,7 +2052,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
         console.log('✅ Connected to server');
         if (isRecording) {
           updateCaptureStatus(); // reconnected mid-recording: keep showing the recording state
-        } else {
+        } else if (captureState === 'idle') {
           updateStatus('Connected to server', 'connected');
           startBtn.disabled = false;
         }
@@ -2086,43 +2086,34 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
         console.log('🔌 WebSocket closed:', event.code, event.reason);
         updateStatus('Disconnected', '');
         
-        // Only disable if not a temporary reconnection (Stop stays usable while recording)
-        if (event.code !== 1006) { // 1006 = abnormal closure, might be reconnecting
-          startBtn.disabled = true;
-          if (!isRecording) stopBtn.disabled = true;
-        }
-        
-        // Attempt to reconnect with exponential backoff (only if recording)
-        if (isRecording) {
-          let reconnectDelay = 1000;
-          const maxDelay = 10000;
-          let attempts = 0;
-          
-          const attemptReconnect = () => {
-            attempts++;
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              return; // Already connected
+        // Start needs a live socket; Stop stays usable whenever capture is running or starting
+        startBtn.disabled = true;
+        if (captureState === 'idle') stopBtn.disabled = true;
+
+        // Always reconnect (server restarts happen during deploys), with backoff
+        let reconnectDelay = 1000;
+        const maxDelay = 10000;
+        let attempts = 0;
+
+        const attemptReconnect = () => {
+          attempts++;
+          if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+            return; // Already connected, or a connection attempt is in progress
+          }
+
+          console.log(`🔄 Reconnecting... (attempt ${attempts})`);
+          connect();
+
+          // If still not connected after delay, retry with longer delay
+          setTimeout(() => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+              reconnectDelay = Math.min(reconnectDelay * 1.5, maxDelay);
+              attemptReconnect();
             }
-            if (ws && ws.readyState === WebSocket.CONNECTING) {
-              return; // A connection attempt is already in progress
-            }
-            
-            console.log(`🔄 Reconnecting... (attempt ${attempts})`);
-            connect();
-            
-            // If still not connected after delay, retry with longer delay
-            setTimeout(() => {
-              if (!ws || ws.readyState !== WebSocket.OPEN) {
-                reconnectDelay = Math.min(reconnectDelay * 1.5, maxDelay);
-                if (isRecording) {
-                  attemptReconnect();
-                }
-              }
-            }, reconnectDelay);
-          };
-          
-          attemptReconnect();
-        }
+          }, reconnectDelay);
+        };
+
+        setTimeout(attemptReconnect, reconnectDelay);
       };
     }
 
@@ -2191,6 +2182,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
     let captureGen = 0;              // bumped by every start and stop; an in-flight start aborts if it changes
     let serverSupportsBinary = false;
     let pendingFlush = null;
+    let acceptingAudio = false;      // true from publish until Stop has flushed the last chunk
 
     // Audio flow: what left this page and what the server says it received
     const audioFlow = {
@@ -2210,8 +2202,13 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
 
     function resolveChunkSize() {
       const v = currentSettings.audioBufferSize;
-      const index = Number.isInteger(v) && v >= 0 && v < BUFFER_SIZES.length ? v : 3;
-      return BUFFER_SIZES[index];
+      if (Number.isInteger(v) && v >= 0 && v < BUFFER_SIZES.length) return BUFFER_SIZES[v];
+      // Settings saved by an older build stored the size itself (e.g. 4096)
+      if (Number.isInteger(v) && v >= BUFFER_SIZES[0]) {
+        const nearest = BUFFER_SIZES.find(size => size >= v);
+        return nearest || BUFFER_SIZES[BUFFER_SIZES.length - 1];
+      }
+      return 2048;
     }
 
     function withTimeout(promise, ms, message) {
@@ -2295,16 +2292,16 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       }
     }
 
-    async function buildWorkletPath(chunkSize) {
-      if (!audioContext.audioWorklet || typeof AudioWorkletNode === 'undefined') {
+    async function buildWorkletPath(g, chunkSize) {
+      if (!g.context.audioWorklet || typeof AudioWorkletNode === 'undefined') {
         throw new Error('AudioWorklet not supported');
       }
       if (!workletModuleUrl) {
         workletModuleUrl = URL.createObjectURL(new Blob([workletSource], { type: 'application/javascript' }));
       }
-      await withTimeout(audioContext.audioWorklet.addModule(workletModuleUrl), 3000, 'AudioWorklet module load timed out');
+      await withTimeout(g.context.audioWorklet.addModule(workletModuleUrl), 3000, 'AudioWorklet module load timed out');
 
-      const node = new AudioWorkletNode(audioContext, 'pcm-chunker', {
+      const node = new AudioWorkletNode(g.context, 'pcm-chunker', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [1],
@@ -2315,9 +2312,9 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       node.port.onmessage = (event) => {
         const msg = event.data;
         if (msg.type === 'chunk') {
-          if (isRecording) sendPcm(msg.buffer);
+          if (acceptingAudio && workletNode === node) sendPcm(msg.buffer);
         } else if (msg.type === 'flushed') {
-          if (msg.buffer) sendPcm(msg.buffer);
+          if (msg.buffer && acceptingAudio && workletNode === node) sendPcm(msg.buffer);
           if (pendingFlush) pendingFlush();
         }
       };
@@ -2325,31 +2322,37 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
         // The processor threw on the audio thread: it outputs silence from now on, so switch paths
         console.error('❌ AudioWorklet processor error, switching to compatibility mode', event);
         try { node.disconnect(); } catch (e) { /* ignore */ }
+        if (workletNode !== node) return; // an old node from a stopped session
         workletNode = null;
         if (isRecording) {
-          buildScriptProcessorPath(chunkSize);
+          const live = { context: audioContext, source: sourceNode, muteGain };
+          buildScriptProcessorPath(live, chunkSize);
+          processor = live.processor;
+          fallbackChunker = live.chunker;
           capturePath = 'scriptprocessor';
           updateCaptureStatus();
         }
       };
-      sourceNode.connect(node);
-      node.connect(muteGain);
-      workletNode = node;
+      g.source.connect(node);
+      node.connect(g.muteGain);
+      g.workletNode = node;
     }
 
-    function buildScriptProcessorPath(chunkSize) {
-      fallbackChunker = new PcmChunker({
-        inRate: audioContext.sampleRate,
+    function buildScriptProcessorPath(g, chunkSize) {
+      const chunker = new PcmChunker({
+        inRate: g.context.sampleRate,
         outRate: TARGET_RATE,
         chunkSize,
         onChunk: (chunk) => sendPcm(chunk.buffer)
       });
-      processor = audioContext.createScriptProcessor(chunkSize, 1, 1);
-      processor.onaudioprocess = (event) => {
-        if (isRecording) fallbackChunker.push(event.inputBuffer.getChannelData(0));
+      const node = g.context.createScriptProcessor(chunkSize, 1, 1);
+      node.onaudioprocess = (event) => {
+        if (acceptingAudio && fallbackChunker === chunker) chunker.push(event.inputBuffer.getChannelData(0));
       };
-      sourceNode.connect(processor);
-      processor.connect(muteGain); // ScriptProcessorNode only runs when connected to the destination
+      g.source.connect(node);
+      node.connect(g.muteGain); // ScriptProcessorNode only runs when connected to the destination
+      g.processor = node;
+      g.chunker = chunker;
     }
 
     /**
@@ -2363,63 +2366,73 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       startBtn.disabled = true;
       stopBtn.disabled = false; // Stop during start cancels it
 
+      // Everything is built in `g` and only becomes the live graph once setup has fully succeeded.
+      // A Stop (or another Start) during one of the awaits below can't be disturbed by this one
+      // finishing late: it cleans up its own `g` and touches nothing else.
+      const g = { stream: null, context: null, source: null, analyser: null, muteGain: null, workletNode: null, processor: null, chunker: null, path: null };
+
       try {
-        const stream = await acquireStream(audioSource.value);
-        if (!stillMine()) {
-          stream.getTracks().forEach(track => track.stop());
-          return;
-        }
-        mediaStream = stream;
+        g.stream = await acquireStream(audioSource.value);
+        if (!stillMine()) { await teardownGraph(g); return; }
 
-        const graph = await createCaptureGraph(stream);
-        audioContext = graph.context;
-        sourceNode = graph.source;
-        if (!stillMine()) { await teardownAudioGraph(); return; }
+        const graph = await createCaptureGraph(g.stream);
+        g.context = graph.context;
+        g.source = graph.source;
+        if (!stillMine()) { await teardownGraph(g); return; }
 
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
-          if (audioContext.state === 'suspended') {
-            updateStatus('Audio is blocked by the browser - click Start again', '');
-            audioContext.addEventListener('statechange', () => {
-              if (audioContext && audioContext.state === 'running' && isRecording) updateCaptureStatus();
-            });
+        if (g.context.state === 'suspended') {
+          await g.context.resume();
+          if (g.context.state === 'suspended') {
+            throw new Error('The browser blocked audio capture. Click Start Recording again.');
           }
         }
 
         // Level meter
-        analyser = audioContext.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.8;
-        sourceNode.connect(analyser);
+        g.analyser = g.context.createAnalyser();
+        g.analyser.fftSize = 256;
+        g.analyser.smoothingTimeConstant = 0.8;
+        g.source.connect(g.analyser);
 
         // Silent output so the graph keeps running without anything audible
-        muteGain = audioContext.createGain();
-        muteGain.gain.value = 0;
-        muteGain.connect(audioContext.destination);
+        g.muteGain = g.context.createGain();
+        g.muteGain.gain.value = 0;
+        g.muteGain.connect(g.context.destination);
 
         const chunkSize = resolveChunkSize();
         console.log(`🎵 Chunk size: ${chunkSize} samples (~${(chunkSize / TARGET_RATE * 1000).toFixed(0)} ms)`);
         try {
-          await buildWorkletPath(chunkSize);
-          capturePath = 'worklet';
+          await buildWorkletPath(g, chunkSize);
+          g.path = 'worklet';
         } catch (error) {
           console.warn('⚠️ AudioWorklet unavailable, using ScriptProcessor:', error.message || error);
-          buildScriptProcessorPath(chunkSize);
-          capturePath = 'scriptprocessor';
+          buildScriptProcessorPath(g, chunkSize);
+          g.path = 'scriptprocessor';
         }
-        if (!stillMine()) { await teardownAudioGraph(); return; }
+        if (!stillMine()) { await teardownGraph(g); return; }
+
+        // Publish: from here on this is the live graph
+        mediaStream = g.stream;
+        audioContext = g.context;
+        sourceNode = g.source;
+        analyser = g.analyser;
+        muteGain = g.muteGain;
+        workletNode = g.workletNode;
+        processor = g.processor;
+        fallbackChunker = g.chunker;
+        capturePath = g.path;
 
         resetAudioFlow();
+        acceptingAudio = true;
         isRecording = true;
         captureState = 'recording';
         updateCaptureStatus();
         updateVisualization();
-        audioFlow.ticker = setInterval(flowTick, 1000);
+        audioFlow.ticker = setInterval(renderAudioFlow, 1000);
         renderAudioFlow();
       } catch (error) {
+        await teardownGraph(g);
         if (!stillMine()) return;
         console.error('❌ Error starting recording:', error);
-        await teardownAudioGraph();
         captureState = 'idle';
         isRecording = false;
         startBtn.disabled = !(ws && ws.readyState === WebSocket.OPEN);
@@ -2434,11 +2447,15 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
      */
     async function stopRecording() {
       captureGen++; // cancels an in-flight start
-      if (captureState === 'idle') return;
+      if (captureState === 'idle' || captureState === 'stopping') return;
       const wasRecording = captureState === 'recording';
       captureState = 'stopping';
       isRecording = false;
       stopBtn.disabled = true;
+
+      // Release the mic/tab immediately (also matters on page unload, before any await below).
+      // The chunker still holds the last partial chunk, which is flushed next.
+      if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
 
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
@@ -2455,6 +2472,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
         const tail = fallbackChunker.flush();
         if (tail) sendPcm(tail.buffer);
       }
+      acceptingAudio = false;
       await teardownAudioGraph();
       discardCatchup();
 
@@ -2483,35 +2501,49 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       });
     }
 
-    // Safe to call more than once. Tracks are stopped before the first await so it also works on unload.
-    async function teardownAudioGraph() {
-      if (workletNode) {
-        workletNode.port.onmessage = null;
-        workletNode.onprocessorerror = null;
-        try { workletNode.disconnect(); } catch (e) { /* ignore */ }
-        workletNode = null;
+    // Tear down one graph object (a live one or an aborted start's). Safe to call more than once.
+    async function teardownGraph(g) {
+      if (g.workletNode) {
+        g.workletNode.port.onmessage = null;
+        g.workletNode.onprocessorerror = null;
+        try { g.workletNode.disconnect(); } catch (e) { /* ignore */ }
+        g.workletNode = null;
       }
-      if (processor) {
-        processor.onaudioprocess = null;
-        try { processor.disconnect(); } catch (e) { /* ignore */ }
-        processor = null;
+      if (g.processor) {
+        g.processor.onaudioprocess = null;
+        try { g.processor.disconnect(); } catch (e) { /* ignore */ }
+        g.processor = null;
       }
-      for (const node of [analyser, sourceNode, muteGain]) {
+      for (const node of [g.analyser, g.source, g.muteGain]) {
         if (node) { try { node.disconnect(); } catch (e) { /* ignore */ } }
       }
-      analyser = null;
-      sourceNode = null;
-      muteGain = null;
-      fallbackChunker = null;
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        mediaStream = null;
+      g.analyser = null;
+      g.source = null;
+      g.muteGain = null;
+      g.chunker = null;
+      if (g.stream) {
+        g.stream.getTracks().forEach(track => track.stop());
+        g.stream = null;
       }
-      if (audioContext) {
-        const context = audioContext;
-        audioContext = null;
+      if (g.context) {
+        const context = g.context;
+        g.context = null;
         try { await context.close(); } catch (e) { /* ignore */ }
       }
+    }
+
+    // Tear down the live graph
+    async function teardownAudioGraph() {
+      const g = { stream: mediaStream, context: audioContext, source: sourceNode, analyser, muteGain, workletNode, processor, chunker: fallbackChunker };
+      mediaStream = null;
+      audioContext = null;
+      sourceNode = null;
+      analyser = null;
+      muteGain = null;
+      workletNode = null;
+      processor = null;
+      fallbackChunker = null;
+      await teardownGraph(g);
     }
 
     // ----- sending -----
@@ -2549,6 +2581,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
     }
 
     function flushCatchup() {
+      if (catchup.retryTimer) clearTimeout(catchup.retryTimer);
       catchup.retryTimer = null;
       while (catchup.chunks.length > 0 && canSendNow()) {
         const buffer = catchup.chunks.shift();
@@ -2576,24 +2609,19 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
     // ----- flow indicator -----
 
     function resetAudioFlow() {
+      discardCatchup(); // leftovers from a previous session don't count against this one
       audioFlow.startedAt = Date.now();
       audioFlow.sentBytes = 0;
       audioFlow.droppedBytes = 0;
       audioFlow.lastServerStats = null;
       audioFlow.lastServerStatsAt = 0;
       audioFlow.zeroTicks = 0;
-      discardCatchup();
-      audioFlow.droppedBytes = 0;
     }
 
     function onAudioStats(stats) {
       audioFlow.lastServerStats = stats;
       audioFlow.lastServerStatsAt = Date.now();
       audioFlow.zeroTicks = stats.bytesPerSec > 0 ? 0 : audioFlow.zeroTicks + 1;
-      renderAudioFlow();
-    }
-
-    function flowTick() {
       renderAudioFlow();
     }
 
@@ -2854,8 +2882,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
         { id: 'pauseThreshold', valueId: 'pauseThresholdValue', format: (v) => `${v}ms (${v/1000}s)` },
         { id: 'audioBufferSize', valueId: 'audioBufferSizeValue', format: (v) => {
           // Map slider value (0-6) to power-of-two buffer sizes
-          const bufferSizes = [256, 512, 1024, 2048, 4096, 8192, 16384];
-          const actualSize = bufferSizes[parseInt(v)] || 2048;
+          const actualSize = BUFFER_SIZES[parseInt(v)] || 2048;
           const latency = (actualSize / 16000 * 1000).toFixed(0);
           return `${actualSize} samples (~${latency}ms)`;
         }}
@@ -3207,7 +3234,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       if (settings.autoClear !== undefined) document.getElementById('autoClear').value = settings.autoClear.toString();
       // Handle audioBufferSize: migrate from old format (actual size) to new format (slider index)
       if (settings.audioBufferSize !== undefined) {
-        const bufferSizes = [256, 512, 1024, 2048, 4096, 8192, 16384];
+        const bufferSizes = BUFFER_SIZES;
         let sliderIndex;
         
         // If it's a large number (actual buffer size), find the index

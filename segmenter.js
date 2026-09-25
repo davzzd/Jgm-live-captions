@@ -47,6 +47,17 @@ function joinTokens(tokens) {
   return tokens.map(t => t.text || '').join('');
 }
 
+// Translation chunks sometimes arrive without a leading space ("Hello," + "My name").
+// Insert one when the previous text ends in punctuation and the next starts with a letter/digit.
+const NEEDS_SPACE_RE = /[,.;:!?\u0964\u0965]$/;
+const STARTS_WORD_RE = /^[\p{L}\p{N}]/u;
+function joinWithSpace(previous, next) {
+  if (previous && next && NEEDS_SPACE_RE.test(previous) && STARTS_WORD_RE.test(next)) {
+    return previous + ' ' + next;
+  }
+  return previous + next;
+}
+
 function tokenConfidence(token) {
   const c = token.confidence ?? token.conf ?? token.confidence_score;
   return typeof c === 'number' ? c : null;
@@ -161,7 +172,7 @@ class CaptionSegmenter {
     }
 
     if (displayFinals.length > 0) {
-      this.display.finals += joinTokens(displayFinals);
+      this.display.finals = joinWithSpace(this.display.finals, joinTokens(displayFinals));
       this.display.lastFinalAt = now;
       for (const t of displayFinals) {
         const c = tokenConfidence(t);
