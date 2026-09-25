@@ -1014,6 +1014,28 @@
     .soniox-btn.secondary:hover:not(:disabled) { background: var(--danger); color: #ffffff; }
     .soniox-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
+    /* Live viewer count in the status row */
+    .viewer-pill {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--line-strong);
+      color: var(--text-2);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .viewer-pill strong { color: var(--text); font-size: 15px; }
+    .viewer-pill.active {
+      background: rgba(76, 175, 80, 0.12);
+      border-color: rgba(76, 175, 80, 0.45);
+      color: #a5d6a7;
+    }
+    .viewer-pill.active strong { color: #ffffff; }
+
     /* Password screen */
     .password-modal { background: rgba(10, 14, 20, 0.94); }
     .password-box { background: var(--surface-solid); border: 1px solid var(--line); box-shadow: var(--shadow); }
@@ -1378,6 +1400,7 @@
         <div class="status-indicator">
           <div id="statusDot" class="status-dot"></div>
           <span id="statusText" class="status-text">Connecting...</span>
+          <span id="viewerPill" class="viewer-pill" title="Phones currently connected to the audience page">👥 <strong id="viewerPillCount">0</strong> viewers</span>
         </div>
 
         <div class="device-selector">
@@ -2099,6 +2122,16 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       }
     }
 
+    function renderViewerCount(count) {
+      const n = Number(count) || 0;
+      const pill = document.getElementById('viewerPill');
+      document.getElementById('viewerPillCount').textContent = n;
+      pill.lastChild.textContent = n === 1 ? ' viewer' : ' viewers';
+      pill.classList.toggle('active', n > 0);
+      const sidebar = document.getElementById('activeViewers');
+      if (sidebar) sidebar.textContent = n;
+    }
+
     function renderCaptionDisplayState(state) {
       captionDisplayEnabled = !!state.enabled;
       captionDisplayBtn.textContent = captionDisplayEnabled ? '⏹️ Stop Captions Display' : '▶️ Start Captions Display';
@@ -2165,6 +2198,10 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
 
           if (data.type === 'audio_stats') {
             onAudioStats(data);
+            return;
+          }
+          if (data.type === 'viewer_count') {
+            renderViewerCount(data.count);
             return;
           }
           if (data.type === 'youtube_status') {
@@ -3276,7 +3313,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
             const data = await response.json();
             currentAudienceUrl = data.url;
             audienceUrlInput.value = data.url;
-            activeViewersSpan.textContent = data.activeViewers || 0;
+            renderViewerCount(data.activeViewers || 0);
           } else {
             // Fallback: construct URL manually if API fails
             const protocol = window.location.protocol;

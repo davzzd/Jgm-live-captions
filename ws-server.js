@@ -2709,6 +2709,7 @@ app.get('/audience/stream', (req, res) => {
   audienceSSEClients.add(res);
 
   console.log(`👥 Audience viewer connected (${audienceSSEClients.size} total)`);
+  broadcastViewerCount();
 
   // Send initial service status
   res.write(`data: ${JSON.stringify(serviceStatus)}\n\n`);
@@ -2784,6 +2785,7 @@ app.get('/audience/stream', (req, res) => {
     clearInterval(heartbeat);
     audienceSSEClients.delete(res);
     console.log(`👥 Audience viewer disconnected (${audienceSSEClients.size} remaining)`);
+    broadcastViewerCount();
   });
 });
 
@@ -2858,6 +2860,22 @@ function youtubeState() {
 
 function captionDisplayState() {
   return { type: 'caption_display_status', enabled: captionDisplayEnabled };
+}
+
+function viewerCountState() {
+  return { type: 'viewer_count', count: audienceSSEClients.size };
+}
+
+/**
+ * Tell every admin page how many phones are connected (sent on each viewer connect/disconnect)
+ */
+function broadcastViewerCount() {
+  const message = JSON.stringify(viewerCountState());
+  clientWebSockets.forEach(ws => {
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(message); } catch (e) { /* ignore */ }
+    }
+  });
 }
 
 /**
@@ -3141,6 +3159,7 @@ wssClients.on('connection', (ws) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(youtubeState()));
       ws.send(JSON.stringify(captionDisplayState()));
+      ws.send(JSON.stringify(viewerCountState()));
     }
   }, 100);
 
