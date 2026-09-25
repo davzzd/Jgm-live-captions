@@ -3064,6 +3064,61 @@ server.on('upgrade', (request, socket, head) => {
 wssClients.on('connection', (ws) => {
   console.log('✅ Browser client connected (mic input)');
 
+  // Audio flow stats for this admin page (shown as "Audio → server: N KB/s" on the page)
+  const audioStats = { bytes: 0, chunks: 0, lastAudioAt: 0, quiet: true };
+  let warnedOddFrame = false;
+  const statsTimer = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const active = Date.now() - audioStats.lastAudioAt < 3000;
+    if (!active && audioStats.quiet) return; // nothing arriving and the page already knows
+    const session = activeSession;
+    try {
+      ws.send(JSON.stringify({
+        type: 'audio_stats',
+        bytesPerSec: audioStats.bytes,
+        chunksPerSec: audioStats.chunks,
+        forwardedToSoniox: !!(session && !session.ending && session.ws && session.ws.readyState === WebSocket.OPEN)
+      }));
+    } catch (error) {
+      // Socket is closing; the close handler clears the timer
+    }
+    audioStats.bytes = 0;
+    audioStats.chunks = 0;
+    audioStats.quiet = !active; // one trailing zero after audio stops, then silence
+  }, 1000);
+
+  /**
+   * Forward one PCM chunk (s16le, 16 kHz, mono) to Soniox. Returns true if it was sent.
+   */
+  const forwardAudio = (audioData) => {
+    audioStats.bytes += audioData.length;
+    audioStats.chunks++;
+    audioStats.lastAudioAt = Date.now();
+    audioStats.quiet = false;
+
+    // Allow audio as soon as the connection is open, even if the config isn't confirmed yet:
+    // Soniox buffers it while processing the configuration
+    const session = activeSession;
+    if (session && !session.ending && session.ws.readyState === WebSocket.OPEN) {
+      try {
+        session.ws.send(audioData, { binary: true });
+        lastAudioSentTime = Date.now();
+        if (Math.random() < 0.01) {
+          console.log(`📤 Sending audio chunk: ${audioData.length} bytes (configured: ${isSonioxConfigured})`);
+        }
+        return true;
+      } catch (error) {
+        if (Math.random() < 0.001) {
+          console.error('❌ Error sending audio to Soniox:', error.message);
+        }
+      }
+    } else if (Math.random() < 0.001) {
+      // Not connected (or reconnecting) - audio is dropped until the connection is back
+      console.warn('⚠️ Cannot send audio - Soniox not connected');
+    }
+    return false;
+  };
+
   // Don't auto-connect to Soniox - wait for user to start connection via UI
   // Send current connection status to the new client
   setTimeout(() => {
@@ -3088,40 +3143,28 @@ wssClients.on('connection', (ws) => {
     }
   }, 100);
 
-  ws.on('message', (message) => {
+  ws.on('message', (message, isBinary) => {
     try {
-      // Check if message is a string (JSON) or binary
-      let data;
-      if (typeof message === 'string') {
-        try {
-          data = JSON.parse(message);
-        } catch (parseError) {
-          console.warn('⚠️ Received non-JSON string message:', message.toString().substring(0, 100));
-          return; // Skip non-JSON messages
-        }
-      } else if (Buffer.isBuffer(message)) {
-        // Binary message - try to parse as UTF-8 string first (might be JSON)
-        try {
-          const messageStr = message.toString('utf8');
-          data = JSON.parse(messageStr);
-        } catch (parseError) {
-          // If it's not JSON, it might be raw audio data
-          // But we expect audio data to come as JSON with type: 'audio'
-          // So this is unexpected - log once per 1000 messages to avoid spam
-          if (Math.random() < 0.001) {
-            console.warn('⚠️ Received binary message that is not JSON (might be raw audio):', message.length, 'bytes');
+      // Binary frames are raw PCM audio (s16le, 16 kHz, mono) from the page's audio capture
+      if (isBinary) {
+        if (message.length === 0 || message.length % 2 !== 0) {
+          if (!warnedOddFrame) {
+            warnedOddFrame = true;
+            console.warn(`⚠️ Ignoring binary frame of ${message.length} bytes (not 16-bit PCM)`);
           }
-          return; // Skip non-JSON binary messages
-        }
-      } else {
-        // Try to convert to string and parse
-        try {
-          const messageStr = message.toString();
-          data = JSON.parse(messageStr);
-        } catch (parseError) {
-          console.warn('⚠️ Received unknown message type that cannot be parsed:', typeof message);
           return;
         }
+        forwardAudio(message);
+        return;
+      }
+
+      // Text frames are JSON control messages (and, from older pages, JSON-wrapped audio)
+      let data;
+      try {
+        data = JSON.parse(message.toString());
+      } catch (parseError) {
+        console.warn('⚠️ Received non-JSON message:', message.toString().substring(0, 100));
+        return;
       }
 
       if (data.type === 'start_soniox') {
@@ -3191,50 +3234,27 @@ wssClients.on('connection', (ws) => {
               : 'Not connected'
         }));
       } else if (data.type === 'audio') {
-        // Forward audio data to Soniox with minimal delay
-        // Allow audio to be sent as long as connection is open, even if config not yet confirmed
-        // Soniox can buffer audio while waiting for configuration
-        const session = activeSession;
-        if (session && !session.ending && session.ws.readyState === WebSocket.OPEN) {
-          // Convert array of Int16 values to binary Buffer (optimized)
-          let audioData;
-          try {
-            if (data.format === 'base64') {
-              audioData = Buffer.from(data.data, 'base64');
-            } else if (data.format === 'array') {
-              // Direct conversion for better performance
-              audioData = Buffer.from(new Int16Array(data.data).buffer);
-            } else {
-              audioData = Buffer.from(new Int16Array(data.data).buffer);
-            }
-
-            // Only send if we have valid audio data
-            if (audioData && audioData.length > 0) {
-              session.ws.send(audioData, { binary: true });
-              lastAudioSentTime = Date.now();
-
-              // Log occasionally for debugging (every ~100 chunks)
-              if (Math.random() < 0.01) {
-                console.log(`📤 Sending audio chunk: ${audioData.length} bytes (configured: ${isSonioxConfigured})`);
-              }
-            }
-          } catch (error) {
-            // Log errors but don't spam (reconnects are handled by the Soniox close handler)
-            if (Math.random() < 0.001) {
-              console.error('❌ Error processing audio:', error.message);
-            }
+        // JSON-wrapped audio from pages loaded before the binary format was introduced
+        let audioData;
+        try {
+          audioData = data.format === 'base64'
+            ? Buffer.from(data.data, 'base64')
+            : Buffer.from(new Int16Array(data.data).buffer);
+        } catch (error) {
+          if (Math.random() < 0.001) {
+            console.error('❌ Error decoding audio message:', error.message);
           }
-        } else if (Math.random() < 0.001) {
-          // Not connected (or reconnecting) - audio is dropped until the connection is back
-          console.warn('⚠️ Cannot send audio - Soniox not connected');
+          return;
         }
+        if (audioData.length > 0) forwardAudio(audioData);
       } else if (data.type === 'config') {
         // Client requesting configuration
         ws.send(JSON.stringify({
           type: 'config',
           sampleRate: 16000,
           channels: 1,
-          format: 'pcm_s16le'
+          format: 'pcm_s16le',
+          binaryAudio: true // this server accepts raw PCM as binary frames
         }));
       } else if (data.type === 'settings') {
         // The server needs pauseThreshold to decide overlay paragraph breaks
@@ -3291,6 +3311,7 @@ wssClients.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log('🔌 Browser client disconnected');
+    clearInterval(statsTimer);
     // Remove from client list
     const index = clientWebSockets.indexOf(ws);
     if (index > -1) {
@@ -3300,6 +3321,7 @@ wssClients.on('connection', (ws) => {
 
   ws.on('error', (error) => {
     console.error('❌ Browser client error:', error);
+    clearInterval(statsTimer);
     // Remove from client list on error
     const index = clientWebSockets.indexOf(ws);
     if (index > -1) {

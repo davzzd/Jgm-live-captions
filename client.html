@@ -367,6 +367,27 @@
       margin-top: 15px;
     }
 
+    .audio-flow {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    .audio-flow.warn {
+      color: #e74c3c;
+      opacity: 1;
+      font-weight: 600;
+    }
+    .audio-flow.amber {
+      color: #f39c12;
+      opacity: 1;
+    }
+    .audio-flow-extra {
+      opacity: 0.85;
+    }
+
     .level-meter {
       flex: 1;
       height: 8px;
@@ -1164,6 +1185,10 @@
         </div>
         <span id="levelText" class="level-text">0 dB</span>
       </div>
+      <div id="audioFlow" class="audio-flow">
+        <span id="audioFlowText">Audio → server: —</span>
+        <span id="audioFlowExtra" class="audio-flow-extra"></span>
+      </div>
 
       <div class="controls">
         <button id="startBtn" class="btn-start">Start Recording</button>
@@ -1601,7 +1626,7 @@
               <span class="setting-value" id="audioBufferSizeValue">2048 samples (~128ms)</span>
               <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">
                 Lower = less delay, higher = more stable<br>
-                <span style="opacity: 0.8;">Note: Must be a power of 2. Restart recording to apply changes.</span>
+                <span style="opacity: 0.8;">Applied the next time you press Start Recording.</span>
               </div>
             </div>
           </div>
@@ -1633,6 +1658,101 @@
   </div>
   </div>
 
+  <!--
+    Audio capture processor. This text is used three ways:
+    1. loaded into an AudioWorklet (runs on the browser's audio thread) via a Blob URL,
+    2. evaluated on the page for the ScriptProcessor fallback (same PcmChunker class),
+    3. evaluated by test/pcm-worklet.test.js with stub globals.
+    Keep it free of DOM and page references.
+  -->
+  <script id="pcmWorkletSource" type="text/plain">
+// PcmChunker: Float32 audio at any sample rate -> 16-bit PCM at outRate, in fixed-size chunks.
+class PcmChunker {
+  constructor(options) {
+    this.inRate = options.inRate;
+    this.outRate = options.outRate || 16000;
+    this.chunkSize = options.chunkSize || 2048;
+    this.onChunk = options.onChunk;
+    this.resample = this.inRate !== this.outRate;
+    this.ratio = this.inRate / this.outRate;
+    this.buf = new Int16Array(this.chunkSize);
+    this.fill = 0;
+    this.pos = 0;   // fractional read position, relative to the start of the current block
+    this.prev = 0;  // last sample of the previous block (for interpolation across block edges)
+  }
+
+  // input: Float32Array with one channel of samples (128 per call inside a worklet)
+  push(input) {
+    const n = input.length;
+    if (n === 0) return;
+    if (!this.resample) {
+      for (let i = 0; i < n; i++) this.emit(input[i]);
+      return;
+    }
+    // Linear interpolation. Positions can start at -1 (between the previous block's last sample
+    // and this block's first), and carry over to the next block when they run past the end.
+    let pos = this.pos;
+    for (;;) {
+      const i0 = Math.floor(pos);
+      const i1 = i0 + 1;
+      if (i1 >= n) break;
+      const s0 = i0 < 0 ? this.prev : input[i0];
+      this.emit(s0 + (input[i1] - s0) * (pos - i0));
+      pos += this.ratio;
+    }
+    this.prev = input[n - 1];
+    this.pos = pos - n;
+  }
+
+  emit(sample) {
+    const s = sample > 1 ? 1 : (sample < -1 ? -1 : sample);
+    this.buf[this.fill++] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    if (this.fill === this.chunkSize) {
+      const out = this.buf;
+      this.buf = new Int16Array(this.chunkSize); // the sent chunk is transferred away, so a new one is needed
+      this.fill = 0;
+      this.onChunk(out);
+    }
+  }
+
+  // Returns the partial chunk (or null) and clears it. Used when recording stops.
+  flush() {
+    if (this.fill === 0) return null;
+    const out = this.buf.slice(0, this.fill);
+    this.fill = 0;
+    return out;
+  }
+}
+
+if (typeof AudioWorkletProcessor !== 'undefined') {
+  class PcmWorkletProcessor extends AudioWorkletProcessor {
+    constructor(options) {
+      super();
+      const o = (options && options.processorOptions) || {};
+      this.chunker = new PcmChunker({
+        inRate: sampleRate, // AudioWorkletGlobalScope global: the AudioContext's rate
+        outRate: o.targetRate || 16000,
+        chunkSize: o.chunkSize || 2048,
+        onChunk: (chunk) => this.port.postMessage({ type: 'chunk', buffer: chunk.buffer }, [chunk.buffer])
+      });
+      this.port.onmessage = (event) => {
+        if (event.data && event.data.type === 'flush') {
+          const tail = this.chunker.flush();
+          this.port.postMessage({ type: 'flushed', buffer: tail ? tail.buffer : null }, tail ? [tail.buffer] : []);
+        }
+      };
+    }
+
+    process(inputs) {
+      const input = inputs[0];
+      // No input (source stopped) sends nothing, so the page's flow indicator can show it
+      if (input && input.length > 0) this.chunker.push(input[0]);
+      return true; // keep alive; the page disconnects the node when recording stops
+    }
+  }
+  registerProcessor('pcm-chunker', PcmWorkletProcessor);
+}
+  </script>
   <script>
     /**
      * Professional Microphone Input Client
@@ -1812,12 +1932,17 @@
       updateStatus('Connecting to server...', '');
 
       ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
 
       // Set up message handler BEFORE opening connection
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
 
+          if (data.type === 'audio_stats') {
+            onAudioStats(data);
+            return;
+          }
           if (data.type === 'youtube_status') {
             renderYoutubeState(data);
             return;
@@ -1913,6 +2038,7 @@
           // Handle config messages
           if (data.type === 'config') {
             console.log('📋 Server config:', data);
+            serverSupportsBinary = data.binaryAudio === true;
             sampleRateEl.textContent = data.sampleRate + ' Hz';
             channelsEl.textContent = data.channels;
             formatEl.textContent = data.format;
@@ -1924,8 +2050,12 @@
 
       ws.onopen = () => {
         console.log('✅ Connected to server');
-        updateStatus('Connected to server', 'connected');
-        startBtn.disabled = false;
+        if (isRecording) {
+          updateCaptureStatus(); // reconnected mid-recording: keep showing the recording state
+        } else {
+          updateStatus('Connected to server', 'connected');
+          startBtn.disabled = false;
+        }
         
         // Request configuration
         ws.send(JSON.stringify({ type: 'config' }));
@@ -1942,6 +2072,9 @@
         setTimeout(() => {
           ws.send(JSON.stringify({ type: 'get_soniox_status' }));
         }, 500);
+
+        // Audio held while the socket was down goes out now, in order
+        if (catchup.chunks.length > 0) flushCatchup();
       };
 
       ws.onerror = (error) => {
@@ -1953,10 +2086,10 @@
         console.log('🔌 WebSocket closed:', event.code, event.reason);
         updateStatus('Disconnected', '');
         
-        // Only disable if not a temporary reconnection
+        // Only disable if not a temporary reconnection (Stop stays usable while recording)
         if (event.code !== 1006) { // 1006 = abnormal closure, might be reconnecting
           startBtn.disabled = true;
-          stopBtn.disabled = true;
+          if (!isRecording) stopBtn.disabled = true;
         }
         
         // Attempt to reconnect with exponential backoff (only if recording)
@@ -1969,6 +2102,9 @@
             attempts++;
             if (ws && ws.readyState === WebSocket.OPEN) {
               return; // Already connected
+            }
+            if (ws && ws.readyState === WebSocket.CONNECTING) {
+              return; // A connection attempt is already in progress
             }
             
             console.log(`🔄 Reconnecting... (attempt ${attempts})`);
@@ -2031,201 +2167,493 @@
       animationFrameId = requestAnimationFrame(updateVisualization);
     }
 
+    // ===== AUDIO CAPTURE =====
+    // Mic/tab audio -> AudioWorklet (off the main thread) -> 16 kHz 16-bit PCM -> binary WebSocket frames.
+    // Falls back to a ScriptProcessorNode (main thread) if the worklet can't be used.
+
+    const BUFFER_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384];
+    const TARGET_RATE = 16000;
+    const BYTES_PER_SEC = TARGET_RATE * 2;
+    const HIGH_WATER_BYTES = 64 * 1024;        // ~2 s queued in the socket: stop pushing, buffer instead
+    const CATCHUP_CAP_BYTES = 10 * BYTES_PER_SEC; // keep at most 10 s of audio while the socket is down
+
+    const workletSource = document.getElementById('pcmWorkletSource').textContent;
+    // The same PcmChunker class the worklet uses, for the fallback path
+    const PcmChunker = new Function(workletSource + '\nreturn PcmChunker;')();
+    let workletModuleUrl = null;
+
+    let sourceNode = null;
+    let muteGain = null;
+    let workletNode = null;
+    let fallbackChunker = null;
+    let capturePath = null;          // 'worklet' | 'scriptprocessor'
+    let captureState = 'idle';       // 'idle' | 'starting' | 'recording' | 'stopping'
+    let captureGen = 0;              // bumped by every start and stop; an in-flight start aborts if it changes
+    let serverSupportsBinary = false;
+    let pendingFlush = null;
+
+    // Audio flow: what left this page and what the server says it received
+    const audioFlow = {
+      sentBytes: 0,
+      droppedBytes: 0,
+      lastServerStats: null,
+      lastServerStatsAt: 0,
+      startedAt: 0,
+      zeroTicks: 0,
+      ticker: null
+    };
+    const catchup = { chunks: [], bytes: 0, retryTimer: null };
+
+    const audioFlowEl = document.getElementById('audioFlow');
+    const audioFlowText = document.getElementById('audioFlowText');
+    const audioFlowExtra = document.getElementById('audioFlowExtra');
+
+    function resolveChunkSize() {
+      const v = currentSettings.audioBufferSize;
+      const index = Number.isInteger(v) && v >= 0 && v < BUFFER_SIZES.length ? v : 3;
+      return BUFFER_SIZES[index];
+    }
+
+    function withTimeout(promise, ms, message) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(message)), ms);
+        promise.then(v => { clearTimeout(timer); resolve(v); }, e => { clearTimeout(timer); reject(e); });
+      });
+    }
+
+    /**
+     * Get the mic or tab audio stream (constraints unchanged from the original implementation)
+     */
+    async function acquireStream(sourceType) {
+      if (sourceType === 'tab') {
+        updateStatus('Select tab or screen to capture audio...', '');
+        const constraints = {
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          video: { width: { ideal: 1 }, height: { ideal: 1 }, frameRate: { ideal: 1 } }
+        };
+        let stream;
+        try {
+          // Request screen/tab sharing with audio (video required by some browsers)
+          stream = await navigator.mediaDevices.getDisplayMedia(constraints);
+        } catch (error) {
+          if (error.name === 'NotAllowedError') {
+            throw new Error('Screen sharing permission denied. Please allow screen sharing and make sure to check "Share audio".');
+          }
+          throw error;
+        }
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          stream.getTracks().forEach(track => track.stop());
+          throw new Error('No audio track in selected source. Make sure to check "Share audio" when selecting a tab.');
+        }
+        // We only need audio
+        stream.getVideoTracks().forEach(track => {
+          track.stop();
+          stream.removeTrack(track);
+        });
+        console.log('✅ Tab audio access granted');
+        console.log('🖥️ Using source:', audioTracks[0].label);
+        return stream;
+      }
+
+      updateStatus('Requesting microphone access...', '');
+      const deviceId = audioInput.value;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          sampleRate: TARGET_RATE,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      console.log('✅ Microphone access granted');
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length > 0) console.log('🎤 Using device:', audioTracks[0].label);
+      return stream;
+    }
+
+    /**
+     * AudioContext at 16 kHz if the browser allows it; otherwise the device rate (the chunker resamples)
+     */
+    async function createCaptureGraph(stream) {
+      for (const options of [{ sampleRate: TARGET_RATE }, undefined]) {
+        let context = null;
+        try {
+          context = options ? new AudioContext(options) : new AudioContext();
+          const source = context.createMediaStreamSource(stream);
+          if (context.sampleRate !== TARGET_RATE) {
+            console.warn(`🎵 AudioContext runs at ${context.sampleRate} Hz, will resample to ${TARGET_RATE} Hz`);
+          }
+          return { context, source };
+        } catch (error) {
+          if (context) { try { await context.close(); } catch (e) { /* ignore */ } }
+          if (!options) throw error;
+          console.warn('🎵 16 kHz AudioContext not available, using the device rate:', error.name || error.message);
+        }
+      }
+    }
+
+    async function buildWorkletPath(chunkSize) {
+      if (!audioContext.audioWorklet || typeof AudioWorkletNode === 'undefined') {
+        throw new Error('AudioWorklet not supported');
+      }
+      if (!workletModuleUrl) {
+        workletModuleUrl = URL.createObjectURL(new Blob([workletSource], { type: 'application/javascript' }));
+      }
+      await withTimeout(audioContext.audioWorklet.addModule(workletModuleUrl), 3000, 'AudioWorklet module load timed out');
+
+      const node = new AudioWorkletNode(audioContext, 'pcm-chunker', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 1,
+        channelCountMode: 'explicit', // stereo tab audio is mixed down to mono
+        processorOptions: { chunkSize, targetRate: TARGET_RATE }
+      });
+      node.port.onmessage = (event) => {
+        const msg = event.data;
+        if (msg.type === 'chunk') {
+          if (isRecording) sendPcm(msg.buffer);
+        } else if (msg.type === 'flushed') {
+          if (msg.buffer) sendPcm(msg.buffer);
+          if (pendingFlush) pendingFlush();
+        }
+      };
+      node.onprocessorerror = (event) => {
+        // The processor threw on the audio thread: it outputs silence from now on, so switch paths
+        console.error('❌ AudioWorklet processor error, switching to compatibility mode', event);
+        try { node.disconnect(); } catch (e) { /* ignore */ }
+        workletNode = null;
+        if (isRecording) {
+          buildScriptProcessorPath(chunkSize);
+          capturePath = 'scriptprocessor';
+          updateCaptureStatus();
+        }
+      };
+      sourceNode.connect(node);
+      node.connect(muteGain);
+      workletNode = node;
+    }
+
+    function buildScriptProcessorPath(chunkSize) {
+      fallbackChunker = new PcmChunker({
+        inRate: audioContext.sampleRate,
+        outRate: TARGET_RATE,
+        chunkSize,
+        onChunk: (chunk) => sendPcm(chunk.buffer)
+      });
+      processor = audioContext.createScriptProcessor(chunkSize, 1, 1);
+      processor.onaudioprocess = (event) => {
+        if (isRecording) fallbackChunker.push(event.inputBuffer.getChannelData(0));
+      };
+      sourceNode.connect(processor);
+      processor.connect(muteGain); // ScriptProcessorNode only runs when connected to the destination
+    }
+
     /**
      * Start recording from microphone or tab audio
      */
     async function startRecording() {
+      if (captureState !== 'idle') return;
+      const gen = ++captureGen;
+      const stillMine = () => gen === captureGen;
+      captureState = 'starting';
+      startBtn.disabled = true;
+      stopBtn.disabled = false; // Stop during start cancels it
+
       try {
-        const sourceType = audioSource.value;
+        const stream = await acquireStream(audioSource.value);
+        if (!stillMine()) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+        mediaStream = stream;
 
-        if (sourceType === 'tab') {
-          // Tab/System Audio Mode - using getDisplayMedia
-          updateStatus('Select tab or screen to capture audio...', '');
+        const graph = await createCaptureGraph(stream);
+        audioContext = graph.context;
+        sourceNode = graph.source;
+        if (!stillMine()) { await teardownAudioGraph(); return; }
 
-          const constraints = {
-            audio: {
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false
-            },
-            video: {
-              width: { ideal: 1 },
-              height: { ideal: 1 },
-              frameRate: { ideal: 1 }
-            }
-          };
-
-          try {
-            // Request screen/tab sharing with audio (video required by some browsers)
-            mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
-
-            // Check if audio track exists
-            const audioTracks = mediaStream.getAudioTracks();
-            if (audioTracks.length === 0) {
-              throw new Error('No audio track in selected source. Make sure to check "Share audio" when selecting a tab.');
-            }
-
-            // Stop and remove video track if present (we only need audio)
-            const videoTracks = mediaStream.getVideoTracks();
-            videoTracks.forEach(track => {
-              track.stop();
-              mediaStream.removeTrack(track);
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+          if (audioContext.state === 'suspended') {
+            updateStatus('Audio is blocked by the browser - click Start again', '');
+            audioContext.addEventListener('statechange', () => {
+              if (audioContext && audioContext.state === 'running' && isRecording) updateCaptureStatus();
             });
-
-            console.log('✅ Tab audio access granted');
-            console.log('🖥️ Using source:', audioTracks[0].label);
-          } catch (error) {
-            if (error.name === 'NotAllowedError') {
-              throw new Error('Screen sharing permission denied. Please allow screen sharing and make sure to check "Share audio".');
-            }
-            throw error;
-          }
-
-        } else {
-          // Microphone Mode - using getUserMedia
-          updateStatus('Requesting microphone access...', '');
-
-          const deviceId = audioInput.value;
-          const constraints = {
-            audio: {
-              deviceId: deviceId ? { exact: deviceId } : undefined,
-              sampleRate: 16000,
-              channelCount: 1,
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
-          };
-
-          // Get microphone stream
-          mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-          console.log('✅ Microphone access granted');
-          const audioTracks = mediaStream.getAudioTracks();
-          if (audioTracks.length > 0) {
-            console.log('🎤 Using device:', audioTracks[0].label);
           }
         }
 
-        // Create AudioContext at 16kHz
-        audioContext = new AudioContext({ sampleRate: 16000 });
-        const source = audioContext.createMediaStreamSource(mediaStream);
-
-        // Create analyser for visualization
+        // Level meter
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         analyser.smoothingTimeConstant = 0.8;
-        source.connect(analyser);
+        sourceNode.connect(analyser);
 
-        // Create ScriptProcessorNode for audio processing
-        // Use configurable buffer size from settings (default: 2048 = ~128ms at 16kHz)
-        // Map slider value to actual power-of-two buffer size
-        const bufferSizes = [256, 512, 1024, 2048, 4096, 8192, 16384];
-        const sliderValue = currentSettings.audioBufferSize || 3; // Default to index 3 (2048)
-        let bufferSize = bufferSizes[sliderValue] || 2048;
-        
-        // Validate it's a power of two (safety check)
-        if (bufferSize & (bufferSize - 1) || bufferSize < 256 || bufferSize > 16384) {
-          console.error(`❌ Invalid buffer size: ${bufferSize}. Using default 2048.`);
-          bufferSize = 2048;
+        // Silent output so the graph keeps running without anything audible
+        muteGain = audioContext.createGain();
+        muteGain.gain.value = 0;
+        muteGain.connect(audioContext.destination);
+
+        const chunkSize = resolveChunkSize();
+        console.log(`🎵 Chunk size: ${chunkSize} samples (~${(chunkSize / TARGET_RATE * 1000).toFixed(0)} ms)`);
+        try {
+          await buildWorkletPath(chunkSize);
+          capturePath = 'worklet';
+        } catch (error) {
+          console.warn('⚠️ AudioWorklet unavailable, using ScriptProcessor:', error.message || error);
+          buildScriptProcessorPath(chunkSize);
+          capturePath = 'scriptprocessor';
         }
-        
-        console.log(`🎵 Using audio buffer size: ${bufferSize} samples (~${(bufferSize / 16000 * 1000).toFixed(0)}ms latency)`);
-        processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+        if (!stillMine()) { await teardownAudioGraph(); return; }
 
-        processor.onaudioprocess = (event) => {
-          if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
-
-          const inputData = event.inputBuffer.getChannelData(0);
-          
-          // Convert Float32Array to Int16Array (PCM 16-bit) - optimized
-          const int16Array = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            const sample = Math.max(-1, Math.min(1, inputData[i]));
-            int16Array[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-          }
-
-          // Send audio data to server immediately (no batching for minimal delay)
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            try {
-              // Use direct array send for better performance
-              ws.send(JSON.stringify({
-                type: 'audio',
-                format: 'array',
-                data: Array.from(int16Array)
-              }));
-            } catch (error) {
-              // Handle connection errors gracefully
-              if (error.code === 'ECONNRESET' || error.message.includes('not open')) {
-                console.warn('⚠️ Connection lost, will reconnect');
-                connect();
-              }
-            }
-          }
-        };
-
-        // Connect nodes (must connect to destination for ScriptProcessorNode to work)
-        const dummyGain = audioContext.createGain();
-        dummyGain.gain.value = 0; // Mute output
-        source.connect(processor);
-        processor.connect(dummyGain);
-        dummyGain.connect(audioContext.destination);
-
+        resetAudioFlow();
         isRecording = true;
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        updateStatus('Recording... Sending to Soniox', 'recording');
-        
-        // Start visualization
+        captureState = 'recording';
+        updateCaptureStatus();
         updateVisualization();
-
+        audioFlow.ticker = setInterval(flowTick, 1000);
+        renderAudioFlow();
       } catch (error) {
+        if (!stillMine()) return;
         console.error('❌ Error starting recording:', error);
+        await teardownAudioGraph();
+        captureState = 'idle';
+        isRecording = false;
+        startBtn.disabled = !(ws && ws.readyState === WebSocket.OPEN);
+        stopBtn.disabled = true;
         updateStatus('Error: ' + error.message, '');
-        alert('Failed to access microphone: ' + error.message);
+        alert('Failed to start audio capture: ' + error.message);
       }
     }
 
     /**
-     * Stop recording
+     * Stop recording. Sends the last partial chunk first so the final words aren't lost.
      */
-    function stopRecording() {
+    async function stopRecording() {
+      captureGen++; // cancels an in-flight start
+      if (captureState === 'idle') return;
+      const wasRecording = captureState === 'recording';
+      captureState = 'stopping';
       isRecording = false;
+      stopBtn.disabled = true;
 
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
         animationFrameId = null;
       }
-
-      if (processor) {
-        processor.disconnect();
-        processor = null;
+      if (audioFlow.ticker) {
+        clearInterval(audioFlow.ticker);
+        audioFlow.ticker = null;
       }
 
-      if (analyser) {
-        analyser.disconnect();
-        analyser = null;
+      if (wasRecording && workletNode) {
+        await flushWorklet(250);
+      } else if (wasRecording && fallbackChunker) {
+        const tail = fallbackChunker.flush();
+        if (tail) sendPcm(tail.buffer);
       }
+      await teardownAudioGraph();
+      discardCatchup();
 
-      if (audioContext) {
-        audioContext.close();
-        audioContext = null;
-      }
-
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        mediaStream = null;
-      }
+      captureState = 'idle';
+      capturePath = null;
 
       // Reset visualization
       bars.forEach(bar => bar.style.height = '2px');
       levelFill.style.width = '0%';
       levelText.textContent = '-∞ dB';
 
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
+      startBtn.disabled = !(ws && ws.readyState === WebSocket.OPEN);
       updateStatus('Stopped', 'connected');
+      renderAudioFlow();
     }
+
+    function flushWorklet(ms) {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => { pendingFlush = null; resolve(); }, ms);
+        pendingFlush = () => { clearTimeout(timer); pendingFlush = null; resolve(); };
+        try {
+          workletNode.port.postMessage({ type: 'flush' });
+        } catch (error) {
+          pendingFlush();
+        }
+      });
+    }
+
+    // Safe to call more than once. Tracks are stopped before the first await so it also works on unload.
+    async function teardownAudioGraph() {
+      if (workletNode) {
+        workletNode.port.onmessage = null;
+        workletNode.onprocessorerror = null;
+        try { workletNode.disconnect(); } catch (e) { /* ignore */ }
+        workletNode = null;
+      }
+      if (processor) {
+        processor.onaudioprocess = null;
+        try { processor.disconnect(); } catch (e) { /* ignore */ }
+        processor = null;
+      }
+      for (const node of [analyser, sourceNode, muteGain]) {
+        if (node) { try { node.disconnect(); } catch (e) { /* ignore */ } }
+      }
+      analyser = null;
+      sourceNode = null;
+      muteGain = null;
+      fallbackChunker = null;
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+      if (audioContext) {
+        const context = audioContext;
+        audioContext = null;
+        try { await context.close(); } catch (e) { /* ignore */ }
+      }
+    }
+
+    // ----- sending -----
+
+    function canSendNow() {
+      return ws && ws.readyState === WebSocket.OPEN && ws.bufferedAmount < HIGH_WATER_BYTES;
+    }
+
+    function rawSend(buffer) {
+      if (serverSupportsBinary) {
+        ws.send(buffer);
+      } else {
+        // Older server: JSON envelope
+        ws.send(JSON.stringify({ type: 'audio', format: 'array', data: Array.from(new Int16Array(buffer)) }));
+      }
+      audioFlow.sentBytes += buffer.byteLength;
+    }
+
+    /**
+     * Send one PCM chunk, or hold it (up to 10 s) while the socket is down or backed up.
+     */
+    function sendPcm(buffer) {
+      if (catchup.chunks.length === 0 && canSendNow()) {
+        rawSend(buffer);
+        return;
+      }
+      catchup.chunks.push(buffer);
+      catchup.bytes += buffer.byteLength;
+      while (catchup.bytes > CATCHUP_CAP_BYTES) {
+        const oldest = catchup.chunks.shift();
+        catchup.bytes -= oldest.byteLength;
+        audioFlow.droppedBytes += oldest.byteLength;
+      }
+      scheduleCatchupFlush();
+    }
+
+    function flushCatchup() {
+      catchup.retryTimer = null;
+      while (catchup.chunks.length > 0 && canSendNow()) {
+        const buffer = catchup.chunks.shift();
+        catchup.bytes -= buffer.byteLength;
+        rawSend(buffer);
+      }
+      if (catchup.chunks.length > 0) scheduleCatchupFlush();
+    }
+
+    function scheduleCatchupFlush() {
+      if (catchup.retryTimer) return;
+      catchup.retryTimer = setTimeout(flushCatchup, 100);
+    }
+
+    function discardCatchup() {
+      audioFlow.droppedBytes += catchup.bytes;
+      catchup.chunks = [];
+      catchup.bytes = 0;
+      if (catchup.retryTimer) {
+        clearTimeout(catchup.retryTimer);
+        catchup.retryTimer = null;
+      }
+    }
+
+    // ----- flow indicator -----
+
+    function resetAudioFlow() {
+      audioFlow.startedAt = Date.now();
+      audioFlow.sentBytes = 0;
+      audioFlow.droppedBytes = 0;
+      audioFlow.lastServerStats = null;
+      audioFlow.lastServerStatsAt = 0;
+      audioFlow.zeroTicks = 0;
+      discardCatchup();
+      audioFlow.droppedBytes = 0;
+    }
+
+    function onAudioStats(stats) {
+      audioFlow.lastServerStats = stats;
+      audioFlow.lastServerStatsAt = Date.now();
+      audioFlow.zeroTicks = stats.bytesPerSec > 0 ? 0 : audioFlow.zeroTicks + 1;
+      renderAudioFlow();
+    }
+
+    function flowTick() {
+      renderAudioFlow();
+    }
+
+    function updateCaptureStatus() {
+      const mode = capturePath === 'worklet' ? 'AudioWorklet' : 'compatibility mode';
+      const rate = audioContext && audioContext.sampleRate !== TARGET_RATE
+        ? ` · resampling ${audioContext.sampleRate}→${TARGET_RATE}`
+        : '';
+      updateStatus(`Recording (${mode}${rate})`, 'recording');
+    }
+
+    function renderAudioFlow() {
+      const seconds = bytes => (bytes / BYTES_PER_SEC).toFixed(1);
+      let text = 'Audio → server: —';
+      let level = '';
+      const extras = [];
+
+      if (isRecording) {
+        const stats = audioFlow.lastServerStats;
+        const stale = Date.now() - audioFlow.lastServerStatsAt > 3000;
+        if (stats && !stale && audioFlow.zeroTicks < 3) {
+          text = `Audio → server: ${(stats.bytesPerSec / 1024).toFixed(0)} KB/s`;
+          if (!stats.forwardedToSoniox) {
+            extras.push('Soniox not connected');
+            level = 'amber';
+          }
+        } else if (audioFlow.lastServerStatsAt === 0 && Date.now() - audioFlow.startedAt < 3000) {
+          text = 'Audio → server: starting…';
+        } else {
+          text = 'No audio reaching server';
+          level = 'warn';
+        }
+        if (ws && ws.bufferedAmount > HIGH_WATER_BYTES) {
+          extras.push(`backlog: ${(ws.bufferedAmount / 1024).toFixed(0)} KB`);
+          if (!level) level = 'amber';
+        }
+        if (catchup.bytes > 0) {
+          extras.push(`catching up: ${seconds(catchup.bytes)} s queued`);
+          if (!level) level = 'amber';
+        }
+      }
+      if (audioFlow.droppedBytes > 0) extras.push(`dropped ${seconds(audioFlow.droppedBytes)} s`);
+
+      audioFlowText.textContent = text;
+      audioFlowExtra.textContent = extras.join(' · ');
+      audioFlowEl.className = 'audio-flow' + (level ? ' ' + level : '');
+    }
+
+    // For browser tests and troubleshooting from the console
+    window.__captureDebug = () => ({
+      capturePath,
+      captureState,
+      sampleRate: audioContext ? audioContext.sampleRate : null,
+      contextState: audioContext ? audioContext.state : null,
+      sentBytes: audioFlow.sentBytes,
+      droppedBytes: audioFlow.droppedBytes,
+      queuedBytes: catchup.bytes,
+      serverSupportsBinary,
+      stats: audioFlow.lastServerStats
+    });
 
     /**
      * Initialize Settings Panel
@@ -2787,7 +3215,8 @@
           sliderIndex = bufferSizes.indexOf(settings.audioBufferSize);
           if (sliderIndex === -1) {
             // Not found, find nearest power of two
-            sliderIndex = bufferSizes.findIndex(size => size >= settings.audioBufferSize) || 3;
+            const nearest = bufferSizes.findIndex(size => size >= settings.audioBufferSize);
+            sliderIndex = nearest === -1 ? 3 : nearest;
           }
         } else {
           // Already a slider index (0-6)
@@ -2867,17 +3296,14 @@
       // Initialize settings panel
       initializeSettings();
       
-      // Request microphone permission to get device labels
+      // Request microphone permission once so the device list shows labels, then release it
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-        await loadAudioDevices();
-        // Stop the stream immediately (we just needed permission)
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(track => track.stop());
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+        probe.getTracks().forEach(track => track.stop());
       } catch (error) {
         console.log('⚠️ Permission not granted yet, will request when starting');
-        await loadAudioDevices();
       }
+      await loadAudioDevices();
       
       connect();
     });
