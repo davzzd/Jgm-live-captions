@@ -16,6 +16,7 @@ const WebSocket = require('ws');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
+const { CaptionSegmenter, sanitizeCaptionText } = require('./segmenter');
 
 // Load .env file from the same directory as this script
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -110,14 +111,26 @@ console.warn = function (...args) {
 };
 
 /**
+ * Unique, increasing ISO timestamp. Captions are identified by their timestamp
+ * (edit/delete, audience de-duplication), so two captions must never share one.
+ */
+let lastCaptionTimeMs = 0;
+function nextCaptionTimestamp() {
+  let ms = Date.now();
+  if (ms <= lastCaptionTimeMs) ms = lastCaptionTimeMs + 1;
+  lastCaptionTimeMs = ms;
+  return new Date(ms).toISOString();
+}
+
+/**
  * Log a caption to the caption history
  * @param {string} text - The caption text
  * @param {boolean} isFinal - Whether this is a final caption
  */
-function logCaption(text, isFinal = true, tag = '') {
+function logCaption(text, isFinal = true, tag = '', timestamp = nextCaptionTimestamp()) {
+  text = sanitizeCaptionText(text); // captions.log is TSV: no tabs/newlines
   if (!text || !isFinal) return; // Only log final captions
 
-  const timestamp = new Date().toISOString();
   const entry = {
     timestamp,
     text,
@@ -182,7 +195,7 @@ const wssCaptions = new WebSocket.Server({
 });
 
 // Soniox configuration
-const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
+const SONIOX_WS_URL = process.env.SONIOX_WS_URL || 'wss://stt-rt.soniox.com/transcribe-websocket';
 const DEFAULT_SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
@@ -203,8 +216,7 @@ let serviceStatus = {
   timestamp: new Date().toISOString()
 };
 
-// Soniox connection state management
-let sonioxWs = null;
+// Soniox connection state management (the socket itself lives on activeSession)
 let isSonioxConfigured = false;
 let sonioxConnectionState = 'disconnected'; // 'disconnected', 'connecting', 'connected', 'error'
 let currentSonioxConfig = {
@@ -221,8 +233,24 @@ let lastAudioSentTime = 0;
 let connectionStartTime = 0;
 const MAX_RECONNECT_ATTEMPTS = Infinity; // Allow infinite reconnects for long sessions
 const RECONNECT_DELAY = 2000; // Start with 2s, will use exponential backoff
-const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-let heartbeatInterval = null;
+
+// Active Soniox connection. Every socket event handler checks that its session is still
+// the active one, so a socket being replaced can't touch the new connection's state.
+let activeSession = null;
+let sessionCounter = 0;
+
+// Soniox closes the stream if it gets no audio or keepalive for >20s
+const KEEPALIVE_IDLE_MS = 10000;
+const KEEPALIVE_CHECK_MS = 5000;
+const SEGMENTER_TICK_MS = 250;
+const GRACEFUL_END_TIMEOUT_MS = 2000;
+
+// Language hints for auto-detect mode (hints bias recognition, they don't restrict it)
+const AUTO_LANGUAGE_HINTS = (process.env.SONIOX_AUTO_HINTS || 'ml,en,hi,ta,kn,te')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+// Overlay settings the server needs (learned from the settings the admin page forwards)
+const overlaySettings = { pauseThreshold: 5000 };
 
 /**
  * Format caption text for YouTube Live (YouTube-safe format)
@@ -550,15 +578,17 @@ if (youtubePublisher.enabled) {
 }
 
 /**
- * Broadcast text to all caption clients (optimized)
+ * Send the overlay's running caption text to all caption displays (captions.html).
+ * Snapshot shape: { type: 'caption', gen, text, partial }
  */
-function broadcastToCaptions(text) {
-  if (!text) return;
+function broadcastOverlay(snapshot) {
+  if (!snapshot) return;
+  const payload = JSON.stringify(snapshot);
   const deadClients = [];
   captionClients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
       try {
-        client.send(text);
+        client.send(payload);
       } catch (error) {
         deadClients.push(client);
       }
@@ -574,12 +604,11 @@ function broadcastToCaptions(text) {
  * Broadcast caption to audience viewers via SSE
  * Maintains a buffer of last N captions for new connections
  */
-function broadcastToAudience(text, isFinal = false) {
+function broadcastToAudience(text, isFinal = false, timestamp = nextCaptionTimestamp()) {
   if (!text) return;
 
   // Only add final captions to audience buffer
   if (isFinal) {
-    const timestamp = new Date().toISOString();
     const caption = { text, timestamp, type: 'caption' };
 
     // Add to buffer (no limit - show all captions)
@@ -2004,7 +2033,8 @@ app.post('/transcript/clear', (req, res) => {
  * Edit caption endpoint
  */
 app.post('/transcript/edit', (req, res) => {
-  const { timestamp, newText } = req.body;
+  const { timestamp } = req.body;
+  const newText = sanitizeCaptionText(req.body.newText); // captions.log is TSV: no tabs/newlines
 
   if (!timestamp || !newText) {
     return res.status(400).json({ success: false, error: 'Missing timestamp or newText' });
@@ -2456,9 +2486,12 @@ app.post('/api/audience-status', (req, res) => {
 
 
 /**
- * Serve static files (if needed)
+ * Static assets. Only the logo is served; serving the whole directory would expose
+ * server.log (contains connection details), captions.log and the source code.
  */
-app.use(express.static(__dirname));
+app.get('/Logo.png', (req, res) => {
+  res.sendFile(path.join(__dirname, 'Logo.png'));
+});
 
 // Helper function to escape HTML
 function escapeHtml(text) {
@@ -2581,23 +2614,25 @@ wssClients.on('connection', (ws) => {
           console.log('📺 YouTube captions disabled (no URL provided)');
         }
 
-        // Close existing connection if any (properly clean up first)
-        if (sonioxWs) {
+        // A user start resets the reconnect backoff
+        reconnectAttempts = 0;
+        if (reconnectTimeout) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = null;
+        }
+
+        // Replace any existing connection. Its socket handlers ignore events once it is
+        // no longer the active session, so the new one can start right away.
+        if (activeSession) {
           console.log('ℹ️ Closing existing Soniox connection to start new one');
           shutdownSonioxConnection();
-          // Wait for proper cleanup before reconnecting
-          setTimeout(() => {
-            connectToSoniox(apiKey, sourceLanguage, targetLanguage);
-          }, 300);
-        } else {
-          // No existing connection, start immediately
-          connectToSoniox(apiKey, sourceLanguage, targetLanguage);
         }
+        connectToSoniox(apiKey, sourceLanguage, targetLanguage);
       } else if (data.type === 'stop_soniox') {
         // Client requesting to stop Soniox connection
         console.log('🛑 Client requested to stop Soniox connection');
         broadcastServiceStatus('ended', 'Service has ended');
-        shutdownSonioxConnection();
+        endSonioxSession(); // lets Soniox finalize the last words first
       } else if (data.type === 'get_soniox_status') {
         // Client requesting current Soniox status
         ws.send(JSON.stringify({
@@ -2613,7 +2648,8 @@ wssClients.on('connection', (ws) => {
         // Forward audio data to Soniox with minimal delay
         // Allow audio to be sent as long as connection is open, even if config not yet confirmed
         // Soniox can buffer audio while waiting for configuration
-        if (sonioxWs && sonioxWs.readyState === WebSocket.OPEN) {
+        const session = activeSession;
+        if (session && !session.ending && session.ws.readyState === WebSocket.OPEN) {
           // Convert array of Int16 values to binary Buffer (optimized)
           let audioData;
           try {
@@ -2628,7 +2664,7 @@ wssClients.on('connection', (ws) => {
 
             // Only send if we have valid audio data
             if (audioData && audioData.length > 0) {
-              sonioxWs.send(audioData, { binary: true });
+              session.ws.send(audioData, { binary: true });
               lastAudioSentTime = Date.now();
 
               // Log occasionally for debugging (every ~100 chunks)
@@ -2637,24 +2673,14 @@ wssClients.on('connection', (ws) => {
               }
             }
           } catch (error) {
-            // Log errors but don't spam
+            // Log errors but don't spam (reconnects are handled by the Soniox close handler)
             if (Math.random() < 0.001) {
               console.error('❌ Error processing audio:', error.message);
             }
-            // If connection issue, attempt reconnection
-            if (error.code === 'ECONNRESET' || error.message.includes('not open')) {
-              scheduleReconnect();
-            }
           }
-        } else if (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN) {
-          // Connection lost, log once
-          if (Math.random() < 0.001) {
-            console.warn('⚠️ Cannot send audio - Soniox not connected');
-          }
-          // Attempt reconnection (only if not manual disconnect)
-          if (!manualDisconnect && !reconnectTimeout) {
-            scheduleReconnect();
-          }
+        } else if (Math.random() < 0.001) {
+          // Not connected (or reconnecting) - audio is dropped until the connection is back
+          console.warn('⚠️ Cannot send audio - Soniox not connected');
         }
       } else if (data.type === 'config') {
         // Client requesting configuration
@@ -2665,6 +2691,13 @@ wssClients.on('connection', (ws) => {
           format: 'pcm_s16le'
         }));
       } else if (data.type === 'settings') {
+        // The server needs pauseThreshold to decide overlay paragraph breaks
+        const pauseThreshold = Number(data.settings && data.settings.pauseThreshold);
+        if (Number.isFinite(pauseThreshold) && pauseThreshold > 0) {
+          overlaySettings.pauseThreshold = pauseThreshold;
+          if (activeSession) activeSession.segmenter.setPauseThreshold(pauseThreshold);
+        }
+
         // Forward settings to all caption display clients
         console.log('📤 Forwarding settings to caption displays:', data.settings);
         captionClients.forEach(client => {
@@ -2678,6 +2711,10 @@ wssClients.on('connection', (ws) => {
       } else if (data.type === 'clear') {
         // Clear captions on all display clients
         console.log('🧹 Clearing captions on all displays');
+        if (activeSession) {
+          activeSession.segmenter.resetOverlay(Date.now());
+          activeSession.segmenter.overlayChanged(); // mark the empty snapshot as sent
+        }
         captionClients.forEach(client => {
           if (client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({ type: 'clear' }));
@@ -2735,6 +2772,15 @@ wssCaptions.on('connection', (ws) => {
   console.log('✅ Caption display connected');
   captionClients.add(ws);
 
+  // Repaint a (re)connected overlay immediately with the current text
+  if (activeSession) {
+    try {
+      ws.send(JSON.stringify(activeSession.segmenter.overlaySnapshot()));
+    } catch (error) {
+      // Ignore, the close handler cleans up
+    }
+  }
+
   ws.on('close', () => {
     console.log('🔌 Caption display disconnected');
     captionClients.delete(ws);
@@ -2777,44 +2823,152 @@ function broadcastSonioxStatus(status, message = '') {
 }
 
 /**
- * Gracefully shutdown Soniox connection
+ * Soniox session lifecycle
+ *
+ * A session wraps one Soniox WebSocket plus its CaptionSegmenter and timers.
+ * `activeSession` is the only session allowed to change global state; handlers of a
+ * replaced or stopped socket see `activeSession !== session` and do nothing.
+ */
+
+const SERVICE_DISCLAIMER = 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
+
+// Overlay state of the last session, so a reconnect keeps the Resolume text on screen
+let lastOverlay = null;
+
+function isActiveSession(session) {
+  return !!session && activeSession === session;
+}
+
+function teardownSession(session) {
+  clearTimeout(session.connectTimer);
+  clearInterval(session.keepaliveTimer);
+  clearInterval(session.tickTimer);
+  clearTimeout(session.finishTimer);
+  session.connectTimer = session.keepaliveTimer = session.tickTimer = session.finishTimer = null;
+  lastOverlay = { ...session.segmenter.overlay };
+}
+
+/**
+ * Send one finished caption line to the transcript, audience viewers and YouTube.
+ */
+function emitSegment(segment) {
+  const { text, source, reason, avgConfidence } = segment;
+  const confidence = avgConfidence != null ? ` ${(avgConfidence * 100).toFixed(1)}%` : '';
+  logger.info(`📝 Caption [${source}/${reason}]${confidence}: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
+
+  // One timestamp shared by captions.log and the audience buffer: it is the caption's ID
+  // for edit/delete, and the audience page dedupes by it
+  const timestamp = nextCaptionTimestamp();
+  logCaption(text, true, '', timestamp);
+  broadcastToAudience(text, true, timestamp);
+  youtubePublisher.publish(text).catch(() => {
+    // Error already logged in publish method
+  });
+}
+
+function emitSegments(session, segments) {
+  segments.forEach(emitSegment);
+  if (session.segmenter.takeLateTranslationWarning()) {
+    console.warn('⚠️ Translation arrived right after an untranslated fallback caption (possible duplicate line)');
+  }
+}
+
+function publishOverlay(session) {
+  if (session.segmenter.overlayChanged()) {
+    broadcastOverlay(session.segmenter.overlaySnapshot());
+  }
+}
+
+/**
+ * Stop the Soniox connection immediately (used when restarting with new settings).
+ * Buffered finals are still emitted so nothing is lost.
  */
 function shutdownSonioxConnection() {
-  console.log('🛑 Shutting down Soniox connection gracefully...');
+  console.log('🛑 Shutting down Soniox connection...');
 
-  // Set flags FIRST to prevent any race conditions
-  manualDisconnect = true; // Mark as manual disconnect to prevent auto-reconnect
-  isReconnecting = false; // Reset reconnecting flag
-  isSonioxConfigured = false; // Reset config flag
+  manualDisconnect = true; // prevent auto-reconnect
+  isReconnecting = false;
+  isSonioxConfigured = false;
   sonioxConnectionState = 'disconnected';
-
-  // Broadcast disconnected status immediately (before closing)
-  broadcastSonioxStatus('disconnected', 'Connection stopped');
-
-  // Stop heartbeat
-  stopHeartbeat();
-
-  // Clear reconnect timeout if any
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
   }
 
-  // Close WebSocket connection
-  if (sonioxWs) {
+  const session = activeSession;
+  activeSession = null;
+  if (session) {
+    teardownSession(session);
+    emitSegments(session, session.segmenter.flush('stop', Date.now()));
+    publishOverlay(session);
     try {
-      // Close with normal closure code
-      if (sonioxWs.readyState === WebSocket.OPEN || sonioxWs.readyState === WebSocket.CONNECTING) {
-        sonioxWs.close(1000, 'Manual disconnect');
+      if (session.ws.readyState === WebSocket.OPEN || session.ws.readyState === WebSocket.CONNECTING) {
+        session.ws.close(1000, 'Manual disconnect');
       }
     } catch (error) {
-      console.error('❌ Error closing Soniox WebSocket:', error);
+      console.error('❌ Error closing Soniox WebSocket:', error.message);
     }
-    // Clear the reference immediately
-    sonioxWs = null;
   }
 
-  console.log('✅ Soniox connection shut down successfully');
+  broadcastSonioxStatus('disconnected', 'Connection stopped');
+  console.log('✅ Soniox connection shut down');
+}
+
+/**
+ * Stop the Soniox connection gracefully: send an empty frame so Soniox finalizes the last
+ * words, wait (bounded) for its `finished` response, emit everything, then close.
+ */
+function endSonioxSession(done) {
+  manualDisconnect = true;
+  isReconnecting = false;
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+
+  const session = activeSession;
+  const finish = () => {
+    if (session && !session.finished) {
+      session.finished = true;
+      if (activeSession === session) activeSession = null;
+      teardownSession(session);
+      emitSegments(session, session.segmenter.flush('end', Date.now()));
+      publishOverlay(session);
+      try {
+        if (session.ws.readyState === WebSocket.OPEN || session.ws.readyState === WebSocket.CONNECTING) {
+          session.ws.close(1000, 'Session ended');
+        }
+      } catch (error) {
+        // Ignore
+      }
+    }
+    isSonioxConfigured = false;
+    sonioxConnectionState = 'disconnected';
+    broadcastSonioxStatus('disconnected', 'Connection stopped');
+    console.log('✅ Soniox session ended');
+    if (done) done();
+  };
+
+  if (!session || session.ws.readyState !== WebSocket.OPEN) {
+    finish();
+    return;
+  }
+
+  console.log('🛑 Ending Soniox session (waiting for final words)...');
+  session.ending = true;
+  session.onFinished = finish;
+  clearInterval(session.keepaliveTimer);
+  session.keepaliveTimer = null;
+  try {
+    session.ws.send(Buffer.alloc(0)); // empty frame = end of audio
+  } catch (error) {
+    finish();
+    return;
+  }
+  session.finishTimer = setTimeout(() => {
+    console.warn('⚠️ Soniox did not confirm end of stream in time, closing anyway');
+    finish();
+  }, GRACEFUL_END_TIMEOUT_MS);
 }
 
 /**
@@ -2870,20 +3024,78 @@ pastors commonly speak when preaching from the Bible.
 }
 
 /**
- * Connect to Soniox WebSocket with configurable settings
+ * Build the Soniox configuration message
+ * Field reference: https://soniox.com/docs/stt/api-reference/websocket-api
  */
-function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
-  // Use provided settings or fall back to current config
+function buildSonioxConfig(config) {
+  const translate = config.sourceLanguage !== config.targetLanguage && config.targetLanguage !== 'none';
+  const endpointDelay = Number(process.env.SONIOX_MAX_ENDPOINT_DELAY_MS) || 2000;
+
+  const sonioxConfig = {
+    api_key: config.apiKey,
+    model: process.env.SONIOX_MODEL || 'stt-rt-v5',
+    audio_format: 's16le',
+    sample_rate: 16000,
+    num_channels: 1,
+    enable_endpoint_detection: true,
+    max_endpoint_delay_ms: Math.min(3000, Math.max(500, endpointDelay)),
+    enable_language_identification: true
+  };
+
+  if (config.sourceLanguage === 'auto') {
+    // Hints only bias recognition; they make language identification more accurate
+    sonioxConfig.language_hints = AUTO_LANGUAGE_HINTS;
+  } else if (translate) {
+    // Include the target so switches into it (e.g. English mid-sermon) are recognised well
+    sonioxConfig.language_hints = [...new Set([config.sourceLanguage, config.targetLanguage])];
+  } else {
+    sonioxConfig.language_hints = [config.sourceLanguage];
+  }
+
+  if (translate) {
+    sonioxConfig.translation = {
+      type: 'one_way',
+      target_language: config.targetLanguage
+    };
+  }
+
+  sonioxConfig.context = buildSonioxContext();
+  return sonioxConfig;
+}
+
+/**
+ * Log how tokens are labelled in the first messages of a session
+ * (shows whether target-language speech arrives as 'none' or 'original' + language)
+ */
+function logTokenBreakdown(session, tokens) {
+  const counts = {};
+  tokens.forEach(t => {
+    const key = `${t.translation_status || 'no-status'}/${t.language || '?'}/${t.is_final ? 'final' : 'partial'}`;
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  console.log(`🔍 Soniox tokens (message ${session.messageCount}):`, counts);
+}
+
+// Soniox errors that retrying won't fix (bad key, billing, bad config)
+function isFatalSonioxError(code, message) {
+  if ([401, 402, 403].includes(code)) return true;
+  if ([400, 413].includes(code) && !/duration/i.test(message || '')) return true;
+  return false;
+}
+
+/**
+ * Connect to Soniox WebSocket with configurable settings
+ * @param {boolean} options.resume - true for an automatic reconnect (keeps overlay text)
+ */
+function connectToSoniox(apiKey, sourceLanguage, targetLanguage, options = {}) {
+  const resume = !!options.resume;
   const config = {
     apiKey: apiKey || currentSonioxConfig.apiKey,
     sourceLanguage: sourceLanguage || currentSonioxConfig.sourceLanguage,
     targetLanguage: targetLanguage || currentSonioxConfig.targetLanguage
   };
-
-  // Update current config
   currentSonioxConfig = config;
 
-  // Validate API key
   if (!config.apiKey || config.apiKey.trim().length === 0) {
     console.error('❌ Cannot connect: No API key provided');
     sonioxConnectionState = 'error';
@@ -2891,404 +3103,232 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage) {
     return;
   }
 
-  console.log('🔌 Connecting to Soniox...');
-  console.log(`   API Key: ${config.apiKey.substring(0, 10)}... (${config.apiKey.length} chars)`);
-  console.log(`   Source Language: ${config.sourceLanguage}`);
-  console.log(`   Target Language: ${config.targetLanguage}`);
+  const translate = config.sourceLanguage !== config.targetLanguage && config.targetLanguage !== 'none';
+  const previousOverlay = resume
+    ? lastOverlay
+    : (lastOverlay ? { gen: lastOverlay.gen + 1, committed: '', lastActivityAt: 0 } : undefined);
 
-  manualDisconnect = false; // Reset manual disconnect flag
+  const session = {
+    id: ++sessionCounter,
+    config,
+    ws: null,
+    segmenter: new CaptionSegmenter({
+      mode: translate ? 'translate' : 'transcribe',
+      targetLanguage: config.targetLanguage,
+      pauseThresholdMs: overlaySettings.pauseThreshold,
+      previousOverlay
+    }),
+    messageCount: 0,
+    lastKeepaliveAt: 0,
+    keepaliveCount: 0,
+    ending: false,
+    finished: false,
+    fatalError: null,
+    onFinished: null,
+    connectTimer: null,
+    keepaliveTimer: null,
+    tickTimer: null,
+    finishTimer: null
+  };
+
+  console.log(`🔌 Connecting to Soniox (session ${session.id}${resume ? ', reconnect' : ''})...`);
+  console.log(`   API Key: [redacted] (${config.apiKey.length} chars)`);
+  console.log(`   ${config.sourceLanguage} → ${config.targetLanguage} (${translate ? 'translation' : 'transcription only'})`);
+
+  activeSession = session;
+  manualDisconnect = false;
   sonioxConnectionState = 'connecting';
   broadcastSonioxStatus('connecting', 'Establishing connection...');
 
-  // Add connection timeout (30 seconds)
-  let connectionTimeout = setTimeout(() => {
-    if (sonioxWs && sonioxWs.readyState !== WebSocket.OPEN) {
-      console.error('❌ Soniox connection timeout after 30 seconds');
-      sonioxConnectionState = 'error';
-      broadcastSonioxStatus('error', 'Connection timeout - check API key and network');
-      if (sonioxWs) {
-        try {
-          sonioxWs.close();
-        } catch (e) {
-          // Ignore
-        }
-        sonioxWs = null;
-      }
-      // Don't auto-reconnect on timeout - let user retry
+  const ws = new WebSocket(SONIOX_WS_URL);
+  session.ws = ws;
+
+  session.connectTimer = setTimeout(() => {
+    if (!isActiveSession(session) || ws.readyState === WebSocket.OPEN) return;
+    console.error('❌ Soniox connection timeout after 30 seconds');
+    activeSession = null;
+    teardownSession(session);
+    try {
+      ws.terminate();
+    } catch (e) {
+      // Ignore
+    }
+    sonioxConnectionState = 'error';
+    broadcastSonioxStatus('error', 'Connection timeout - check API key and network');
+    if (resume) {
+      // Mid-service network trouble: keep trying
+      scheduleReconnect();
+    } else {
+      // First connect: let the user retry
       manualDisconnect = true;
     }
   }, 30000);
 
-  sonioxWs = new WebSocket(SONIOX_WS_URL);
-
-  sonioxWs.on('open', () => {
-    // Clear connection timeout
-    if (connectionTimeout) {
-      clearTimeout(connectionTimeout);
-      connectionTimeout = null;
+  ws.on('open', () => {
+    if (!isActiveSession(session)) {
+      try { ws.close(); } catch (e) { /* ignore */ }
+      return;
     }
+    clearTimeout(session.connectTimer);
+    session.connectTimer = null;
 
     console.log('✅ Connected to Soniox WebSocket');
-    reconnectAttempts = 0;
     connectionStartTime = Date.now();
+    lastAudioSentTime = Date.now();
 
-    // Send configuration immediately (no delay for minimal latency)
-    if (sonioxWs.readyState === WebSocket.OPEN) {
-      // Build Soniox configuration
-      const sonioxConfig = {
-        api_key: config.apiKey,
-        model: process.env.SONIOX_MODEL || 'stt-rt-v5',
-        endpoint_detection: true,
-        audio_format: 's16le',
-        sample_rate: 16000,
-        num_channels: 1
-      };
-
-      // Handle source language (auto-detect or specific language)
-      if (config.sourceLanguage === 'auto') {
-        // Auto-detect mode - don't specify language_hints
-        console.log('🌐 Auto-detect mode: Soniox will detect language automatically');
-      } else {
-        // Specific language
-        sonioxConfig.language_hints = [config.sourceLanguage];
-      }
-
-      // Add translation if source and target are different
-      if (config.sourceLanguage !== config.targetLanguage && config.targetLanguage !== 'none') {
-        sonioxConfig.translation = {
-          type: 'one_way',
-          target_language: config.targetLanguage
-        };
-        console.log(`🌍 Translation enabled: ${config.sourceLanguage} → ${config.targetLanguage}`);
-      } else {
-        console.log('📝 Translation disabled (same language or target is "none")');
-      }
-
-      // Add context for improved accuracy (church/sermon domain)
-      sonioxConfig.context = buildSonioxContext();
-      console.log('📚 Added context for church/sermon domain to improve transcription accuracy');
-
-      try {
-        sonioxWs.send(JSON.stringify(sonioxConfig));
-        isSonioxConfigured = false; // Will be set true when we receive first tokens
-        console.log('📤 Configuration sent to Soniox');
-        console.log('📋 Config:', JSON.stringify(sonioxConfig, null, 2));
-
-        // Mark as connected immediately - Soniox buffers audio while processing config
-        // This ensures audio isn't dropped and UI shows correct status
-        sonioxConnectionState = 'connected';
-        broadcastSonioxStatus('connected', `Connected: ${config.sourceLanguage} → ${config.targetLanguage}`);
-        console.log('✅ Soniox ready to receive audio');
-      } catch (error) {
-        console.error('❌ Error sending configuration to Soniox:', error);
-        sonioxConnectionState = 'error';
-        broadcastSonioxStatus('error', 'Failed to send configuration');
-        // Retry connection on config error
-        setTimeout(() => {
-          if (!manualDisconnect) connectToSoniox(config.apiKey, config.sourceLanguage, config.targetLanguage);
-        }, 1000);
-        return;
-      }
+    const sonioxConfig = buildSonioxConfig(config);
+    try {
+      ws.send(JSON.stringify(sonioxConfig));
+    } catch (error) {
+      console.error('❌ Error sending configuration to Soniox:', error.message);
+      ws.terminate(); // close handler reconnects
+      return;
     }
+    isSonioxConfigured = false; // set true on first response
+    console.log('📋 Config sent:', JSON.stringify({ ...sonioxConfig, api_key: '[redacted]', context: '[omitted]' }));
 
-    // Start heartbeat to keep connection alive
-    startHeartbeat();
+    // Soniox buffers audio while it processes the config, so audio can flow immediately
+    sonioxConnectionState = 'connected';
+    broadcastSonioxStatus('connected', `Connected: ${config.sourceLanguage} → ${config.targetLanguage}`);
+
+    // Emit captions on time-based rules (idle, end of utterance, untranslated fallback)
+    session.tickTimer = setInterval(() => {
+      if (!isActiveSession(session)) return;
+      emitSegments(session, session.segmenter.tick(Date.now()));
+      publishOverlay(session);
+    }, SEGMENTER_TICK_MS);
+
+    // Soniox closes the stream after 20s without audio or keepalive
+    session.keepaliveTimer = setInterval(() => {
+      if (!isActiveSession(session) || session.ending || ws.readyState !== WebSocket.OPEN) return;
+      const now = Date.now();
+      if (now - Math.max(lastAudioSentTime, session.lastKeepaliveAt) >= KEEPALIVE_IDLE_MS) {
+        try {
+          ws.send(JSON.stringify({ type: 'keepalive' }));
+          session.lastKeepaliveAt = now;
+          session.keepaliveCount++;
+          if (session.keepaliveCount % 12 === 1) {
+            console.log('💓 No audio - sending keepalive to Soniox');
+          }
+        } catch (error) {
+          console.error('❌ Keepalive send failed:', error.message);
+        }
+      }
+    }, KEEPALIVE_CHECK_MS);
   });
 
-  sonioxWs.on('message', (data) => {
-    // Check if connection is still valid (might be closed during shutdown)
-    if (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN) {
-      return; // Ignore messages after connection closed
+  ws.on('message', (data) => {
+    if (!isActiveSession(session)) return;
+
+    let message;
+    try {
+      message = JSON.parse(data.toString());
+    } catch (error) {
+      console.error('❌ Could not parse Soniox message:', error.message);
+      return;
     }
 
-    try {
-      // Soniox sends JSON messages
-      const message = JSON.parse(data.toString());
+    session.messageCount++;
+    if (session.messageCount === 1) {
+      console.log('📥 First message from Soniox received');
+    } else if (session.messageCount % 1000 === 0) {
+      const uptime = connectionStartTime ? ((Date.now() - connectionStartTime) / 1000 / 60).toFixed(1) : 0;
+      console.log(`📊 Processed ${session.messageCount} messages (${uptime} min uptime)`);
+    }
 
-      // Reduced logging for performance (only log errors and occasional status)
-      if (!sonioxWs._messageCount) sonioxWs._messageCount = 0;
-      sonioxWs._messageCount++;
-
-      // Only log first message and occasional status updates
-      if (sonioxWs._messageCount === 1) {
-        console.log('📥 First message from Soniox received');
-      } else if (sonioxWs._messageCount % 1000 === 0) {
-        const uptime = connectionStartTime ? ((Date.now() - connectionStartTime) / 1000 / 60).toFixed(1) : 0;
-        console.log(`📊 Processed ${sonioxWs._messageCount} messages (${uptime} min uptime)`);
+    if (message.error_code || message.error_message) {
+      console.error(`❌ Soniox error ${message.error_code || ''}: ${message.error_message || ''}`);
+      if (isFatalSonioxError(message.error_code, message.error_message)) {
+        session.fatalError = message.error_message || `Error ${message.error_code}`;
       }
+      return; // Soniox closes the socket after an error; the close handler decides what to do
+    }
 
-      // Check for errors
-      if (message.error_code || message.error_message) {
-        console.error('❌ Soniox error:', message.error_message || message.error_code);
-        return;
-      }
-
-      // Check if configuration was successful (first non-error message)
-      if (!isSonioxConfigured && message.tokens !== undefined) {
+    if (Array.isArray(message.tokens)) {
+      if (!isSonioxConfigured) {
         isSonioxConfigured = true;
         console.log('✅ Soniox configuration confirmed - receiving transcriptions');
-        // Broadcast to audience that service is now live
         broadcastServiceStatus('ready', 'Service is live - Translations appearing below');
       }
-
-      // Process transcription results
-      // Soniox sends tokens with translation_status: 'original' or 'translation'
-      // When source = target (no translation), tokens may not have translation_status
-      // Translation often comes in separate messages after original is finalized
-      // For LIVE translation, we send both partial and final results
-      if (message.tokens && Array.isArray(message.tokens) && message.tokens.length > 0) {
-        // Log first tokens to verify we're receiving them (with details for debugging)
-        if (sonioxWs._messageCount < 10) {
-          console.log(`🔍 Received ${message.tokens.length} tokens from Soniox`);
-          // Log token structure for first few messages to debug
-          if (message.tokens.length > 0) {
-            const sampleToken = message.tokens[0];
-            const hasOriginal = message.tokens.some(t => !t.translation_status || t.translation_status === 'original');
-            const hasTranslation = message.tokens.some(t => t.translation_status === 'translation' || t.translation_status === 'translated');
-            console.log(`   Token analysis:`, {
-              totalTokens: message.tokens.length,
-              hasText: !!sampleToken.text,
-              hasOriginalTokens: hasOriginal,
-              hasTranslatedTokens: hasTranslation,
-              sampleTranslationStatus: sampleToken.translation_status,
-              sampleIsFinal: sampleToken.is_final
-            });
-          }
-        } else if (Math.random() < 0.01) {
-          console.log(`🔍 Received ${message.tokens.length} tokens from Soniox`);
-        }
-
-        // Check if translation is disabled (source = target)
-        const isTranslationDisabled = currentSonioxConfig.sourceLanguage === currentSonioxConfig.targetLanguage ||
-          currentSonioxConfig.targetLanguage === 'none';
-
-        // Separate original and translated tokens
-        // When source = target, tokens may not have translation_status - treat ALL tokens as original
-        let originalTokens, translatedTokens;
-        if (isTranslationDisabled) {
-          // No translation - all tokens are "original" text
-          originalTokens = message.tokens.filter(t => t.text); // Only tokens with text
-          translatedTokens = []; // No translations
-        } else {
-          // Translation enabled - filter by translation_status
-          originalTokens = message.tokens.filter(t =>
-            !t.translation_status ||
-            t.translation_status === 'original'
-          );
-          translatedTokens = message.tokens.filter(t =>
-            t.translation_status === 'translation' ||
-            t.translation_status === 'translated'
-          );
-        }
-
-        // Combine ALL token texts (both partial and final) for live feel
-        const originalText = originalTokens.map(t => t.text || '').join('').trim();
-        const translatedText = translatedTokens.map(t => t.text || '').join('').trim();
-
-        // Calculate average confidence scores for logging
-        const calculateAverageConfidence = (tokens) => {
-          const confidences = tokens
-            .map(t => t.confidence || t.conf || t.confidence_score)
-            .filter(c => c !== undefined && c !== null);
-          if (confidences.length === 0) return null;
-          const sum = confidences.reduce((a, b) => a + b, 0);
-          return (sum / confidences.length * 100).toFixed(1); // Convert to percentage
-        };
-
-        const originalConfidence = calculateAverageConfidence(originalTokens);
-        const translatedConfidence = calculateAverageConfidence(translatedTokens);
-
-        // Check if we have final results
-        const finalOriginalTokens = originalTokens.filter(t => t.is_final === true);
-        const finalTranslatedTokens = translatedTokens.filter(t => t.is_final === true);
-
-        // Handle translation-only messages (translation comes separately)
-        if (translatedTokens.length > 0 && originalTokens.length === 0) {
-          // Send translated text (both partial and final for live feel)
-          if (translatedText) {
-            const isFinal = finalTranslatedTokens.length > 0 && finalTranslatedTokens.length === translatedTokens.length;
-            // Log first few translations to debug startup delay
-            if (sonioxWs._messageCount < 10 || isFinal) {
-              console.log(`📝 ${isFinal ? 'Final' : 'Partial'} translation caption:`, translatedText);
-            }
-
-            // Broadcast translated text immediately (live updates) - don't wait for final
-            broadcastToCaptions(translatedText);
-
-            // Send to YouTube and audience (only final results)
-            if (isFinal) {
-              // Log with confidence score
-              if (translatedConfidence) {
-                logger.info(`📊 Translation confidence: ${translatedConfidence}% - "${translatedText.substring(0, 60)}${translatedText.length > 60 ? '...' : ''}"`);
-              }
-              logCaption(translatedText, true); // Log final caption to history
-              broadcastToAudience(translatedText, true); // Send to audience viewers
-              youtubePublisher.publish(translatedText).catch(err => {
-                // Error already logged in publish method
-              });
-            }
-          }
-          return; // Don't process further if this is translation-only
-        }
-
-        // Handle original tokens (with or without translation in same message)
-        if (originalTokens.length > 0) {
-          // If we have translated text, send it (prefer translated over original)
-          if (translatedText) {
-            const isFinal = finalTranslatedTokens.length > 0 && finalTranslatedTokens.length === translatedTokens.length;
-            // Log first few translations to debug startup delay
-            if (sonioxWs._messageCount < 10 || (isFinal && Math.random() < 0.1)) {
-              console.log(`📝 ${isFinal ? 'Final' : 'Partial'} caption:`, translatedText.substring(0, 50) + (translatedText.length > 50 ? '...' : ''));
-            }
-
-            // Broadcast translated text immediately (live updates) - don't wait for final
-            broadcastToCaptions(translatedText);
-
-            // Send to YouTube and audience (only final results)
-            if (isFinal) {
-              // Log with confidence scores
-              if (originalConfidence || translatedConfidence) {
-                const confInfo = [];
-                if (originalConfidence) confInfo.push(`Original: ${originalConfidence}%`);
-                if (translatedConfidence) confInfo.push(`Translation: ${translatedConfidence}%`);
-                logger.info(`📊 Confidence scores (${confInfo.join(', ')}) - "${translatedText.substring(0, 60)}${translatedText.length > 60 ? '...' : ''}"`);
-              }
-              logCaption(translatedText, true); // Log final caption to history
-              broadcastToAudience(translatedText, true); // Send to audience viewers
-              youtubePublisher.publish(translatedText).catch(err => {
-                // Error already logged in publish method
-              });
-            }
-          } else if (originalText) {
-            // No translation - send original text
-            // If translation is disabled (source = target), always send original
-            // Otherwise, we wait for translation (don't send original source language)
-            const isFinal = finalOriginalTokens.length > 0 && finalOriginalTokens.length === originalTokens.length;
-
-            if (isTranslationDisabled) {
-              // Translation disabled - send original text immediately
-              if (isFinal) {
-                console.log('📝 Final caption (no translation):', originalText);
-              }
-
-              // Broadcast original text (live updates)
-              broadcastToCaptions(originalText);
-
-              // Log and send to YouTube and audience (only final results)
-              if (isFinal) {
-                // Log with confidence score
-                if (originalConfidence) {
-                  logger.info(`📊 Transcription confidence: ${originalConfidence}% - "${originalText.substring(0, 60)}${originalText.length > 60 ? '...' : ''}"`);
-                }
-                logCaption(originalText, true);
-                broadcastToAudience(originalText, true); // Send to audience viewers
-                youtubePublisher.publish(originalText).catch(err => {
-                  // Error already logged in publish method
-                });
-              }
-            } else {
-              // Translation enabled - wait for translation
-              // Only log final results to reduce log spam (partial results are too frequent)
-              if (isFinal) {
-                console.log('📝 Final original (waiting for translation):', originalText);
-              }
-
-              // For now, we'll wait for translation (don't send original source language)
-              // Uncomment below if you want to show original while waiting for translation:
-              // captionClients.forEach(client => {
-              //   if (client.readyState === WebSocket.OPEN) {
-              //     client.send(originalText);
-              //   }
-              // });
-            }
-          }
-        }
+      if (message.tokens.length > 0 && session.messageCount <= 10) {
+        logTokenBreakdown(session, message.tokens);
       }
-    } catch (error) {
-      // Only log if connection is still open (avoid errors during shutdown)
-      if (sonioxWs && sonioxWs.readyState === WebSocket.OPEN) {
-        const errorMessage = error?.message || error?.toString() || 'Unknown error';
-        console.error('❌ Error processing Soniox message:', errorMessage);
-        if (error?.stack && error.stack.length < 500) {
-          console.error('   Stack:', error.stack);
-        }
-      }
-      // Silently ignore errors during shutdown
+
+      emitSegments(session, session.segmenter.ingest(message.tokens, Date.now()));
+      publishOverlay(session);
+    }
+
+    if (message.finished === true) {
+      console.log('🏁 Soniox confirmed end of stream');
+      if (session.onFinished) session.onFinished();
     }
   });
 
-  sonioxWs.on('error', (error) => {
-    // Clear connection timeout
-    if (connectionTimeout) {
-      clearTimeout(connectionTimeout);
-      connectionTimeout = null;
-    }
+  ws.on('error', (error) => {
+    if (!isActiveSession(session)) return;
+    clearTimeout(session.connectTimer);
+    session.connectTimer = null;
 
     const errorMessage = error?.message || error?.toString() || 'Unknown error';
-    console.error('❌ Soniox WebSocket error:', errorMessage);
-    if (error?.code) {
-      console.error('   Error code:', error.code);
-    }
-    if (error?.stack && error.stack.length < 500) {
-      console.error('   Stack:', error.stack);
-    }
-    // Update connection state
+    console.error('❌ Soniox WebSocket error:', errorMessage, error?.code ? `(${error.code})` : '');
     sonioxConnectionState = 'error';
     broadcastSonioxStatus('error', `Connection error: ${errorMessage}`);
-    // Don't reconnect immediately on error, let close handler do it
+    // The close handler reconnects
   });
 
-  sonioxWs.on('close', (code, reason) => {
-    // Clear connection timeout
-    if (connectionTimeout) {
-      clearTimeout(connectionTimeout);
-      connectionTimeout = null;
-    }
+  ws.on('close', (code, reason) => {
+    // A replaced or stopped session was already cleaned up by whoever replaced it
+    if (!isActiveSession(session)) return;
 
+    const reasonStr = reason?.toString() || '';
     const sessionDuration = connectionStartTime ? ((Date.now() - connectionStartTime) / 1000 / 60).toFixed(1) : 0;
-    console.log(`🔌 Soniox WebSocket closed: ${code} ${reason?.toString() || ''} (Session: ${sessionDuration} min)`);
+    console.log(`🔌 Soniox WebSocket closed: ${code} ${reasonStr} (session ${session.id}, ${sessionDuration} min)`);
+
+    if (session.ending) {
+      // Graceful end in progress: finish it now
+      if (session.onFinished) session.onFinished();
+      return;
+    }
+
+    activeSession = null;
+    teardownSession(session);
+    // Never lose finals that were waiting for punctuation or a translation
+    emitSegments(session, session.segmenter.flush('close', Date.now()));
+    publishOverlay(session);
     isSonioxConfigured = false;
-    stopHeartbeat();
+    sonioxConnectionState = 'disconnected';
 
-    // Update connection state
     if (manualDisconnect) {
-      sonioxConnectionState = 'disconnected';
       broadcastSonioxStatus('disconnected', 'Connection stopped by user');
-      broadcastServiceStatus('offline', 'Service has ended');
-    } else {
-      sonioxConnectionState = 'disconnected';
-      const reasonStr = reason?.toString() || 'Unknown reason';
-      broadcastSonioxStatus('disconnected', `Connection closed: ${reasonStr} (code: ${code})`);
-      broadcastServiceStatus('offline', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
+      return;
     }
 
-    // Only reconnect if not a normal closure (1000) or going away (1001), and not a manual disconnect
-    if (code !== 1000 && code !== 1001 && !manualDisconnect) {
-      scheduleReconnect();
-    } else if (manualDisconnect) {
-      console.log('ℹ️ Manual disconnect - not reconnecting');
+    if (session.fatalError) {
+      sonioxConnectionState = 'error';
+      broadcastSonioxStatus('error', session.fatalError);
+      broadcastServiceStatus('offline', SERVICE_DISCLAIMER);
+      manualDisconnect = true; // retrying won't help (bad key, billing, bad config)
+      return;
     }
+
+    // Any other close (network drop, Soniox idle close, max stream duration) → reconnect.
+    // 'connecting' keeps captions visible on phones, 'offline' would hide them.
+    broadcastSonioxStatus('disconnected', `Connection closed (code: ${code}${reasonStr ? `, ${reasonStr}` : ''}) - reconnecting`);
+    broadcastServiceStatus('connecting', SERVICE_DISCLAIMER);
+    scheduleReconnect();
   });
 }
 
-// Update scheduleReconnect to respect manual disconnect
 let isReconnecting = false; // Prevent multiple simultaneous reconnect attempts
 
 function scheduleReconnect() {
   if (manualDisconnect) {
-    // Only log once per shutdown to avoid spam
-    if (!isReconnecting) {
-      console.log('ℹ️ Manual disconnect active - skipping reconnect');
-      isReconnecting = true; // Set flag to prevent repeated logs
-    }
+    console.log('ℹ️ Manual disconnect active - skipping reconnect');
     return;
   }
-
-  // Prevent multiple simultaneous reconnect attempts
   if (isReconnecting && reconnectTimeout) {
-    return; // Already reconnecting
+    return; // Already scheduled
   }
-
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
@@ -3313,90 +3353,45 @@ function scheduleReconnect() {
   reconnectTimeout = setTimeout(() => {
     reconnectTimeout = null;
     isReconnecting = false;
-    if (!manualDisconnect && (!sonioxWs || sonioxWs.readyState !== WebSocket.OPEN)) {
-      connectToSoniox(currentSonioxConfig.apiKey, currentSonioxConfig.sourceLanguage, currentSonioxConfig.targetLanguage);
+    if (!manualDisconnect && !activeSession) {
+      connectToSoniox(currentSonioxConfig.apiKey, currentSonioxConfig.sourceLanguage, currentSonioxConfig.targetLanguage, { resume: true });
     }
   }, delay);
-}
-
-
-/**
- * Start heartbeat to keep connection alive
- */
-function startHeartbeat() {
-  stopHeartbeat();
-  heartbeatInterval = setInterval(() => {
-    if (sonioxWs && sonioxWs.readyState === WebSocket.OPEN) {
-      // Check if we've sent audio recently (within last 60 seconds)
-      const timeSinceLastAudio = Date.now() - lastAudioSentTime;
-      if (timeSinceLastAudio > 60000) {
-        // No audio for 60s, send a ping to keep connection alive
-        try {
-          // Soniox doesn't support ping frames, but we can send empty audio or check connection
-          // For now, just log connection health
-          const uptime = connectionStartTime ? ((Date.now() - connectionStartTime) / 1000 / 60).toFixed(1) : 0;
-          if (Math.random() < 0.1) { // Log 10% of heartbeats
-            console.log(`💓 Connection healthy (${uptime} min uptime)`);
-          }
-        } catch (error) {
-          console.error('❌ Heartbeat error:', error.message);
-        }
-      }
-    } else {
-      stopHeartbeat();
-    }
-  }, HEARTBEAT_INTERVAL);
-}
-
-/**
- * Stop heartbeat
- */
-function stopHeartbeat() {
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
-  }
 }
 
 /**
  * Graceful shutdown handler
  */
+let shuttingDown = false;
+
 function gracefulShutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log('\n🛑 Shutting down gracefully...');
-
-  // Close Soniox connection
-  if (sonioxWs) {
-    stopHeartbeat();
-    sonioxWs.close();
-  }
-
-  // Close all client connections
-  wssClients.clients.forEach(client => {
-    client.close();
-  });
-  wssCaptions.clients.forEach(client => {
-    client.close();
-  });
-
-  // Close log streams
-  logStream.end(() => {
-    console.log('📝 Log file closed');
-  });
-  captionsStream.end(() => {
-    console.log('📝 Captions file closed');
-  });
-
-  // Close server
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
 
   // Force exit after 10 seconds
   setTimeout(() => {
     console.error('⚠️ Forced shutdown');
     process.exit(1);
   }, 10000);
+
+  // End Soniox first so the last words reach captions.log before the files close
+  endSonioxSession(() => {
+    wssClients.clients.forEach(client => client.close());
+    wssCaptions.clients.forEach(client => client.close());
+
+    logStream.end(() => {
+      originalConsoleLog('📝 Log file closed');
+    });
+    captionsStream.end(() => {
+      originalConsoleLog('📝 Captions file closed');
+    });
+
+    server.close(() => {
+      originalConsoleLog('✅ Server closed');
+      process.exit(0);
+    });
+  });
 }
 
 // Handle process signals
