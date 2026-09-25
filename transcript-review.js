@@ -324,6 +324,7 @@
       if (e.key === 'Escape') closeRejected();
       return;
     }
+    if (correctionsModal.style.display !== 'none') return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const target = e.target;
     if (target.closest && target.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -430,6 +431,112 @@
     const result = await post('/api/rejected/clear');
     if (result.success) renderRejected([]);
   });
+
+  // ---------- Corrections (this session only) ----------
+
+  const correctionsBtn = document.getElementById('correctionsBtn');
+  const correctionsModal = document.getElementById('correctionsModal');
+  const correctionsList = document.getElementById('correctionsList');
+  const correctionsForm = document.getElementById('correctionsForm');
+  const corrWrong = document.getElementById('corrWrong');
+  const corrRight = document.getElementById('corrRight');
+  const corrError = document.getElementById('corrError');
+  const correctionsCloseBtn = document.getElementById('correctionsCloseBtn');
+  let correctionEntries = [];
+
+  function renderCorrections(entries) {
+    correctionEntries = entries || [];
+    correctionsBtn.textContent = '✏️ Corrections (' + correctionEntries.length + ')';
+    correctionsList.innerHTML = '';
+    if (correctionEntries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'rejected-empty';
+      empty.textContent = 'No corrections yet.';
+      correctionsList.appendChild(empty);
+      return;
+    }
+    correctionEntries.forEach(entry => {
+      const row = document.createElement('div');
+      row.className = 'corr-row';
+      const wrong = document.createElement('span');
+      wrong.className = 'corr-wrong';
+      wrong.textContent = entry.wrong;
+      const arrow = document.createElement('span');
+      arrow.className = 'corr-arrow';
+      arrow.textContent = '→';
+      const right = document.createElement('span');
+      right.className = 'corr-right';
+      right.textContent = entry.right;
+      const remove = document.createElement('button');
+      remove.textContent = '✕';
+      remove.title = 'Stop applying this (lines already fixed stay fixed)';
+      remove.addEventListener('click', async () => {
+        const result = await post('/api/corrections/remove', { id: entry.id });
+        if (result.success) renderCorrections(result.entries);
+      });
+      row.append(wrong, arrow, right, remove);
+      correctionsList.appendChild(row);
+    });
+  }
+
+  // Update transcript lines the server changed (earlier occurrences of the wrong word)
+  function applyChangedLines(changed) {
+    (changed || []).forEach(({ timestamp, text }) => {
+      const item = document.querySelector('#captionsContainer .caption-item[data-timestamp="' + timestamp + '"]');
+      if (!item) return;
+      const textEl = item.querySelector('.caption-text');
+      if (textEl && !item.classList.contains('editing')) {
+        textEl.textContent = text;
+        textEl.setAttribute('data-original', text.replace(/"/g, '&quot;'));
+        item.classList.add('edited');
+        setTimeout(() => item.classList.remove('edited'), 1200);
+      }
+    });
+  }
+
+  async function loadCorrections() {
+    try {
+      const data = await (await fetch('/api/corrections')).json();
+      renderCorrections(data.entries);
+    } catch (err) {
+      console.error('Could not load corrections:', err);
+    }
+  }
+
+  correctionsForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    corrError.style.display = 'none';
+    const result = await post('/api/corrections', { wrong: corrWrong.value, right: corrRight.value });
+    if (!result.success) {
+      corrError.textContent = result.error || 'Could not add';
+      corrError.style.display = '';
+      return;
+    }
+    renderCorrections(result.entries);
+    applyChangedLines(result.changed);
+    corrWrong.value = '';
+    corrRight.value = '';
+    corrWrong.focus();
+  });
+
+  function openCorrections() {
+    correctionsModal.style.display = '';
+    corrError.style.display = 'none';
+    loadCorrections();
+    setTimeout(() => corrWrong.focus(), 50);
+  }
+  function closeCorrections() {
+    correctionsModal.style.display = 'none';
+  }
+  correctionsBtn.addEventListener('click', openCorrections);
+  correctionsCloseBtn.addEventListener('click', closeCorrections);
+  correctionsModal.addEventListener('click', e => {
+    if (e.target === correctionsModal) closeCorrections();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && correctionsModal.style.display !== 'none') closeCorrections();
+  }, true);
+  loadCorrections();
 
   // Initial state (the SSE stream also sends it on connect)
   fetch('/api/queue')

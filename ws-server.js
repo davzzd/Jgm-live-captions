@@ -18,6 +18,7 @@ const path = require('path');
 const fs = require('fs');
 const { CaptionSegmenter, sanitizeCaptionText } = require('./segmenter');
 const { CaptionQueue } = require('./caption-queue');
+const { Corrections } = require('./corrections');
 
 // Load .env file from the same directory as this script
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -1916,6 +1917,64 @@ app.get('/transcript', (req, res) => {
               padding: 24px 0;
               text-align: center;
             }
+            .corr-form {
+              display: flex;
+              gap: 8px;
+              align-items: center;
+              padding: 14px 20px 6px;
+            }
+            .corr-input {
+              flex: 1;
+              min-width: 0;
+              background: var(--bg);
+              color: var(--text);
+              border: 1px solid var(--border-strong);
+              border-radius: 8px;
+              padding: 9px 12px;
+              font-family: inherit;
+              font-size: 15px;
+            }
+            .corr-input:focus {
+              outline: none;
+              border-color: var(--accent);
+              box-shadow: 0 0 0 3px var(--accent-soft);
+            }
+            .corr-arrow { color: var(--text-faint); font-size: 16px; }
+            .corr-add {
+              background: var(--accent);
+              color: var(--accent-text);
+              border: none;
+              border-radius: 8px;
+              padding: 9px 16px;
+              font-family: inherit;
+              font-size: 14px;
+              font-weight: 600;
+              cursor: pointer;
+            }
+            .corr-add:hover { filter: brightness(1.08); }
+            .corr-error { color: var(--danger); font-size: 13px; padding: 0 20px 6px; }
+            .corr-row {
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              padding: 10px 0;
+              border-bottom: 1px solid var(--border);
+              font-size: 15px;
+            }
+            .corr-row .corr-wrong { color: var(--text-dim); text-decoration: line-through; }
+            .corr-row .corr-right { color: var(--text); font-weight: 600; }
+            .corr-row .corr-fixed { color: var(--text-faint); font-size: 12px; margin-left: auto; white-space: nowrap; }
+            .corr-row button {
+              background: var(--btn);
+              color: var(--text);
+              border: 1px solid var(--border-strong);
+              padding: 4px 10px;
+              border-radius: 8px;
+              cursor: pointer;
+              font-family: inherit;
+              font-size: 12px;
+            }
+            .corr-row button:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 
             @media (max-width: 768px) {
               body { padding: 12px; font-size: 14px; }
@@ -1947,6 +2006,7 @@ app.get('/transcript', (req, res) => {
               <button class="danger" onclick="clearCaptions()">🗑️ Clear All</button>
               <button id="ytPauseBtn" class="yt-btn" onclick="toggleYoutubePause()" disabled title="Pause/resume sending captions to YouTube">📺 YouTube: …</button>
               <button id="rejectedBtn" class="rejected-btn" title="Lines you rejected (not in the transcript or exports)">🚫 Rejected (0)</button>
+              <button id="correctionsBtn" class="rejected-btn" title="Words Soniox keeps getting wrong: fix them for the rest of this session">✏️ Corrections (0)</button>
               <button id="themeToggle" class="theme-btn" title="Switch between dark and light">☀️</button>
             </div>
             </div>
@@ -1972,6 +2032,25 @@ app.get('/transcript', (req, res) => {
           </div>
           <div id="queueContainer" class="queue-container"></div>
           <button id="newLinesBtn" class="new-lines-btn" style="display: none;" onclick="scrollToBottom()">↓ new lines</button>
+          <div id="correctionsModal" class="modal-backdrop" style="display: none;">
+            <div class="modal" role="dialog" aria-labelledby="correctionsTitle">
+              <div class="modal-header">
+                <h2 id="correctionsTitle">✏️ Corrections for this session</h2>
+                <span class="modal-note">When Soniox keeps getting a word wrong, add it here once. Every line from now on is fixed before it reaches phones and YouTube, and earlier lines in the transcript are fixed too. The list is cleared by Clear All.</span>
+              </div>
+              <form id="correctionsForm" class="corr-form" autocomplete="off">
+                <input id="corrWrong" class="corr-input" placeholder="What Soniox wrote (e.g. Sheekinah)" maxlength="80">
+                <span class="corr-arrow">→</span>
+                <input id="corrRight" class="corr-input" placeholder="What it should be (e.g. Shekinah)" maxlength="80">
+                <button type="submit" class="corr-add">Add</button>
+              </form>
+              <div id="corrError" class="corr-error" style="display: none;"></div>
+              <div id="correctionsList" class="rejected-list"></div>
+              <div class="modal-actions">
+                <button id="correctionsCloseBtn">Close</button>
+              </div>
+            </div>
+          </div>
           <div id="rejectedModal" class="modal-backdrop" style="display: none;">
             <div class="modal" role="dialog" aria-labelledby="rejectedTitle">
               <div class="modal-header">
@@ -2601,9 +2680,10 @@ app.post('/transcript/clear', (req, res) => {
     captionHistory.length = 0;
     audienceCaptionBuffer = [];
 
-    // ...and the review queue and the rejected lines list
+    // ...and the review queue, the rejected lines list and this session's corrections
     captionQueue.clear();
     rejectedCaptions = [];
+    corrections.clear();
     saveQueueState();
     saveRejectedCaptions();
     broadcastQueueState();
@@ -3252,7 +3332,7 @@ app.post('/api/caption-display', (req, res) => {
     if (enabled) {
       logger.info('📺 Caption display started');
       if (activeSession) {
-        broadcastOverlay(activeSession.segmenter.overlaySnapshot());
+        broadcastOverlay(correctedOverlaySnapshot(activeSession));
         activeSession.segmenter.overlayChanged(); // mark as sent
       }
     } else {
@@ -3333,6 +3413,33 @@ app.post('/api/queue/edit', (req, res) => {
     return res.json({ success: true }); // no state change worth broadcasting
   }
   queueResult(res, result, action === 'save' && result.ok ? `✏️ Line edited before sending: "${sanitizeCaptionText(req.body.text).substring(0, 60)}"` : null);
+});
+
+// ===== CORRECTIONS (transcript page) =====
+
+app.get('/api/corrections', (req, res) => {
+  res.json({ success: true, entries: corrections.list() });
+});
+
+/**
+ * Add a "wrong → right" replacement for the rest of this session; also fixes lines already
+ * in the transcript and lines waiting in the review queue.
+ */
+app.post('/api/corrections', (req, res) => {
+  const result = corrections.add(req.body.wrong, req.body.right);
+  if (!result.ok) {
+    return res.status(400).json({ success: false, error: result.error });
+  }
+  const changed = applyCorrectionsToHistory();
+  applyCorrectionsToQueue();
+  logger.info(`✏️ Correction added: "${result.entry.wrong}" → "${result.entry.right}" (${changed.length} earlier line(s) fixed)`);
+  res.json({ success: true, entry: result.entry, entries: corrections.list(), changed });
+});
+
+app.post('/api/corrections/remove', (req, res) => {
+  const removed = corrections.remove(req.body.id);
+  if (!removed) return res.status(404).json({ success: false, error: 'Correction not found' });
+  res.json({ success: true, entries: corrections.list() });
 });
 
 app.get('/api/rejected', (req, res) => {
@@ -3676,7 +3783,7 @@ wssCaptions.on('connection', (ws) => {
   // Repaint a (re)connected overlay immediately with the current text
   if (captionDisplayEnabled && activeSession) {
     try {
-      ws.send(JSON.stringify(activeSession.segmenter.overlaySnapshot()));
+      ws.send(JSON.stringify(correctedOverlaySnapshot(activeSession)));
     } catch (error) {
       // Ignore, the close handler cleans up
     }
@@ -3753,7 +3860,8 @@ function teardownSession(session) {
  * Send one finished caption line to the transcript, audience viewers and YouTube.
  */
 function emitSegment(segment) {
-  const { text, source, reason, avgConfidence } = segment;
+  const { source, reason, avgConfidence } = segment;
+  const text = corrections.apply(segment.text);
   const confidence = avgConfidence != null ? ` ${(avgConfidence * 100).toFixed(1)}%` : '';
   logger.info(`📝 Caption [${source}/${reason}]${confidence}: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
 
@@ -3778,8 +3886,9 @@ const REJECTED_FILE = path.join(__dirname, 'rejected-captions.json');
  * Send one approved line to the transcript, phones and YouTube.
  */
 function sendApprovedCaption(item, now) {
-  logCaption(item.text, true, '', item.id);
-  broadcastToAudience(item.text, true, item.id);
+  const text = corrections.apply(item.text); // corrections added while the line was waiting
+  logCaption(text, true, '', item.id);
+  broadcastToAudience(text, true, item.id);
 
   if (!youtubePublisher.enabled) return;
   if (youtubePaused) {
@@ -3789,12 +3898,84 @@ function sendApprovedCaption(item, now) {
   }
   const age = now - item.createdAt;
   if (age > YOUTUBE_MAX_CAPTION_AGE_MS) {
-    logger.warn(`📺 Not sent to YouTube (line is ${Math.round(age / 1000)}s old, too late for the stream): "${item.text.substring(0, 60)}"`);
+    logger.warn(`📺 Not sent to YouTube (line is ${Math.round(age / 1000)}s old, too late for the stream): "${text.substring(0, 60)}"`);
     return;
   }
-  youtubePublisher.publish(item.text, item.createdAt).catch(() => {
+  youtubePublisher.publish(text, item.createdAt).catch(() => {
     // Error already logged in publish method
   });
+}
+
+// ===== SESSION CORRECTIONS =====
+// "wrong → right" replacements the operator adds during a service (see corrections.js).
+// In memory only: cleared by Clear All and by a restart. Applied to every line before it goes
+// to phones, YouTube and the transcript, to lines waiting in the review queue, and to the overlay.
+const corrections = new Corrections();
+
+function correctedOverlaySnapshot(session) {
+  const snapshot = session.segmenter.overlaySnapshot();
+  snapshot.text = corrections.apply(snapshot.text);
+  snapshot.partial = corrections.apply(snapshot.partial);
+  return snapshot;
+}
+
+/**
+ * Re-run the corrections over this session's transcript (captions.log, memory, audience buffer)
+ * and tell phones about the lines that changed. Returns the changed lines.
+ */
+function applyCorrectionsToHistory() {
+  let data = '';
+  try {
+    data = fs.existsSync(CAPTIONS_LOG_FILE) ? fs.readFileSync(CAPTIONS_LOG_FILE, 'utf8') : '';
+  } catch (error) {
+    logger.error('Could not read captions for corrections:', error.message);
+    return [];
+  }
+  const changed = [];
+  const lines = data.split('\n').filter(line => line.trim()).map(line => {
+    const parts = line.split('\t');
+    if (parts.length < 2) return line;
+    const timestamp = parts[0];
+    const tag = parts.length >= 3 ? parts[parts.length - 1] : '';
+    const text = parts.length >= 3 ? parts.slice(1, -1).join('\t') : parts.slice(1).join('\t');
+    const fixed = corrections.apply(text);
+    if (fixed === text) return line;
+    changed.push({ timestamp, text: fixed });
+    return `${timestamp}\t${fixed}\t${tag}`;
+  });
+  if (changed.length === 0) return [];
+  try {
+    fs.writeFileSync(CAPTIONS_LOG_FILE, lines.join('\n') + '\n', 'utf8');
+  } catch (error) {
+    logger.error('Could not save corrected captions:', error.message);
+    return [];
+  }
+  changed.forEach(({ timestamp, text }) => {
+    const memoryEntry = captionHistory.find(c => c.timestamp === timestamp);
+    if (memoryEntry) memoryEntry.text = text;
+    const audienceEntry = audienceCaptionBuffer.find(c => c.timestamp === timestamp);
+    if (audienceEntry) audienceEntry.text = text;
+    const editEvent = JSON.stringify({ text, timestamp, edited: true });
+    audienceSSEClients.forEach(client => {
+      try { client.write(`data: ${editEvent}\n\n`); } catch (error) { /* disconnected */ }
+    });
+  });
+  return changed;
+}
+
+/**
+ * Apply the corrections to lines still waiting in the review queue
+ */
+function applyCorrectionsToQueue() {
+  let touched = false;
+  captionQueue.items.forEach(item => {
+    const fixed = corrections.apply(item.text);
+    if (fixed !== item.text) { item.text = fixed; touched = true; }
+  });
+  if (touched) {
+    saveQueueState();
+    broadcastQueueState();
+  }
 }
 
 const captionQueue = new CaptionQueue({
@@ -3885,7 +4066,7 @@ function emitSegments(session, segments) {
 function publishOverlay(session) {
   if (!captionDisplayEnabled) return; // nobody should be shown captions: skip the work
   if (session.segmenter.overlayChanged()) {
-    broadcastOverlay(session.segmenter.overlaySnapshot());
+    broadcastOverlay(correctedOverlaySnapshot(session));
   }
 }
 
