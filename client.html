@@ -801,8 +801,11 @@
       
       <!-- Navigation Buttons -->
       <div class="nav-buttons" style="display: flex; gap: 10px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap;">
-        <a href="/captions" target="_blank" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease;">
-          📺 Caption Display
+        <button id="captionDisplayBtn" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease; cursor: pointer; font-family: inherit;" title="Start or stop the caption display">
+          ▶️ Start Captions Display
+        </button>
+        <a id="openCaptionDisplayLink" href="/captions" target="jgmCaptionDisplay" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease; display: none;" title="Open the caption display in a new tab">
+          ↗️ Open Display
         </a>
         <a href="/transcript" target="_blank" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease;">
           📝 Transcript
@@ -810,9 +813,31 @@
         <a href="/logs" target="_blank" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease;">
           📊 Server Logs
         </a>
+        <button id="youtubePauseBtn" class="nav-btn" style="padding: 10px 20px; background: rgba(92, 131, 116, 0.3); border: 1px solid rgba(92, 131, 116, 0.5); border-radius: 8px; color: #93B1A6; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s ease; cursor: pointer; font-family: inherit;" disabled title="Pause/resume sending captions to YouTube">
+          📺 YouTube: …
+        </button>
+      </div>
+      <div id="youtubePausedBanner" style="display: none; margin: -8px auto 16px; max-width: 640px; padding: 8px 14px; background: rgba(231, 76, 60, 0.18); border: 1px solid #e74c3c; border-radius: 8px; color: #f1948a; font-size: 13px; font-weight: 600; text-align: center;">
+        ⏸️ YouTube captions are PAUSED — the transcript and phones are still live
       </div>
       
       <style>
+        .nav-btn:disabled {
+          opacity: 0.5;
+          cursor: default !important;
+          transform: none !important;
+          box-shadow: none !important;
+        }
+        .nav-btn.nav-btn-active {
+          background: rgba(39, 174, 96, 0.25) !important;
+          border-color: #27ae60 !important;
+          color: #a9dfbf !important;
+        }
+        .nav-btn.nav-btn-warning {
+          background: rgba(231, 76, 60, 0.25) !important;
+          border-color: #e74c3c !important;
+          color: #f1948a !important;
+        }
         .nav-btn:hover {
           background: rgba(92, 131, 116, 0.5) !important;
           border-color: #93B1A6 !important;
@@ -1704,6 +1729,78 @@
       }
     }
 
+    // ===== YouTube pause/resume and caption display (state lives on the server) =====
+    const youtubePauseBtn = document.getElementById('youtubePauseBtn');
+    const youtubePausedBanner = document.getElementById('youtubePausedBanner');
+    const captionDisplayBtn = document.getElementById('captionDisplayBtn');
+    const openCaptionDisplayLink = document.getElementById('openCaptionDisplayLink');
+    let youtubePaused = false;
+    let captionDisplayEnabled = false;
+    let captionDisplayWindow = null;
+
+    function renderYoutubeState(state) {
+      youtubePaused = !!state.paused;
+      youtubePausedBanner.style.display = youtubePaused ? 'block' : 'none';
+      youtubePauseBtn.classList.toggle('nav-btn-warning', youtubePaused);
+      if (!state.configured && !youtubePaused) {
+        youtubePauseBtn.textContent = '📺 YouTube: Off';
+        youtubePauseBtn.title = 'No YouTube captions URL set (add it in settings, then start Soniox)';
+        youtubePauseBtn.disabled = true;
+      } else {
+        youtubePauseBtn.textContent = youtubePaused ? '▶️ Resume YouTube' : '⏸️ Pause YouTube';
+        youtubePauseBtn.title = youtubePaused
+          ? 'Resume sending captions to YouTube'
+          : 'Stop sending captions to YouTube (transcript and phones stay live)';
+        youtubePauseBtn.disabled = false;
+      }
+    }
+
+    function renderCaptionDisplayState(state) {
+      captionDisplayEnabled = !!state.enabled;
+      captionDisplayBtn.textContent = captionDisplayEnabled ? '⏹️ Stop Captions Display' : '▶️ Start Captions Display';
+      captionDisplayBtn.classList.toggle('nav-btn-active', captionDisplayEnabled);
+      openCaptionDisplayLink.style.display = captionDisplayEnabled ? '' : 'none';
+      captionDisplayBtn.disabled = false;
+    }
+
+    async function postControl(url, body) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Unknown error');
+      return data;
+    }
+
+    youtubePauseBtn.addEventListener('click', async () => {
+      youtubePauseBtn.disabled = true;
+      try {
+        renderYoutubeState(await postControl('/api/youtube-pause', { paused: !youtubePaused }));
+      } catch (err) {
+        youtubePauseBtn.disabled = false;
+        alert('Could not change YouTube captions: ' + err.message);
+      }
+    });
+
+    captionDisplayBtn.addEventListener('click', async () => {
+      const enable = !captionDisplayEnabled;
+      // Open the tab inside the click so the browser doesn't block it as a popup
+      if (enable) captionDisplayWindow = window.open('/captions', 'jgmCaptionDisplay');
+      captionDisplayBtn.disabled = true;
+      try {
+        renderCaptionDisplayState(await postControl('/api/caption-display', { enabled: enable }));
+        if (!enable && captionDisplayWindow && !captionDisplayWindow.closed) {
+          captionDisplayWindow.close();
+        }
+        if (!enable) captionDisplayWindow = null;
+      } catch (err) {
+        captionDisplayBtn.disabled = false;
+        alert('Could not change the caption display: ' + err.message);
+      }
+    });
+
     /**
      * Connect to WebSocket server
      */
@@ -1720,6 +1817,15 @@
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+
+          if (data.type === 'youtube_status') {
+            renderYoutubeState(data);
+            return;
+          }
+          if (data.type === 'caption_display_status') {
+            renderCaptionDisplayState(data);
+            return;
+          }
           
           // Handle Soniox status updates FIRST
           if (data.type === 'soniox_status' && sonioxStatusDot && sonioxStatusText) {

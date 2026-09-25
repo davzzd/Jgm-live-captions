@@ -252,6 +252,11 @@ const AUTO_LANGUAGE_HINTS = (process.env.SONIOX_AUTO_HINTS || 'ml,en,hi,ta,kn,te
 // Overlay settings the server needs (learned from the settings the admin page forwards)
 const overlaySettings = { pauseThreshold: 5000 };
 
+// Operator controls (reset to defaults when the server restarts)
+let youtubePaused = false;          // true = finished lines are not sent to YouTube
+let youtubeSkippedWhilePaused = 0;  // lines not sent during the current pause
+let captionDisplayEnabled = false;  // caption display (captions.html) only gets text when started
+
 /**
  * Format caption text for YouTube Live (YouTube-safe format)
  * YouTube Live caption best practice:
@@ -1241,6 +1246,24 @@ app.get('/transcript', (req, res) => {
               flex-wrap: wrap;
               align-items: center;
             }
+            .controls button.yt-btn.paused {
+              background: #c5534b;
+            }
+            .controls button.yt-btn:disabled {
+              background: #3c3c3c;
+              color: #858585;
+              cursor: default;
+            }
+            .yt-paused-banner {
+              margin-top: 10px;
+              padding: 8px 12px;
+              background: rgba(197, 83, 75, 0.2);
+              border: 1px solid #c5534b;
+              border-radius: 4px;
+              color: #f48771;
+              font-size: 13px;
+              font-weight: bold;
+            }
             .controls button, .controls a {
               background: #0e639c;
               color: white;
@@ -1517,6 +1540,10 @@ app.get('/transcript', (req, res) => {
               <button onclick="location.reload()">🔄 Refresh</button>
               <button onclick="scrollToBottom()">⬇️ Latest</button>
               <button class="danger" onclick="clearCaptions()">🗑️ Clear All</button>
+              <button id="ytPauseBtn" class="yt-btn" onclick="toggleYoutubePause()" disabled title="Pause/resume sending captions to YouTube">📺 YouTube: …</button>
+            </div>
+            <div id="ytPausedBanner" class="yt-paused-banner" style="display: none;">
+              ⏸️ YouTube captions are PAUSED — lines appear here and on phones but are not sent to YouTube
             </div>
             <div class="stats">
               Showing ${displayCaptions.length.toLocaleString()} of ${captions.length.toLocaleString()} captions
@@ -1919,11 +1946,59 @@ app.get('/transcript', (req, res) => {
             // Auto-scroll to bottom on load
             setTimeout(scrollToBottom, 100);
 
+            // ===== YouTube pause/resume =====
+            let youtubePaused = false;
+
+            function renderYoutubeState(state) {
+              youtubePaused = !!state.paused;
+              const btn = document.getElementById('ytPauseBtn');
+              const banner = document.getElementById('ytPausedBanner');
+              btn.classList.toggle('paused', youtubePaused);
+              banner.style.display = youtubePaused ? 'block' : 'none';
+              if (!state.configured && !youtubePaused) {
+                btn.textContent = '📺 YouTube: Off';
+                btn.title = 'No YouTube captions URL set (add it in the admin settings)';
+                btn.disabled = true;
+              } else {
+                btn.textContent = youtubePaused ? '▶️ Resume YouTube' : '⏸️ Pause YouTube';
+                btn.title = youtubePaused ? 'Resume sending captions to YouTube' : 'Stop sending captions to YouTube (transcript and phones stay live)';
+                btn.disabled = false;
+              }
+            }
+
+            function toggleYoutubePause() {
+              const btn = document.getElementById('ytPauseBtn');
+              btn.disabled = true;
+              fetch('/api/youtube-pause', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ paused: !youtubePaused })
+              })
+              .then(res => res.json())
+              .then(state => {
+                if (!state.success) throw new Error(state.error || 'Unknown error');
+                renderYoutubeState(state);
+              })
+              .catch(err => {
+                btn.disabled = false;
+                alert('Could not change YouTube captions: ' + err.message);
+              });
+            }
+
+            fetch('/api/youtube-status')
+              .then(res => res.json())
+              .then(renderYoutubeState)
+              .catch(err => console.error('Could not load YouTube status:', err));
+
             // Real-time updates via Server-Sent Events
             const eventSource = new EventSource('/transcript/stream');
 
             eventSource.onmessage = function(event) {
               const caption = JSON.parse(event.data);
+              if (caption.type === 'youtube_status') {
+                renderYoutubeState(caption);
+                return;
+              }
               const container = document.getElementById('captionsContainer');
 
               // Remove "no captions" message if present
@@ -2254,8 +2329,9 @@ app.get('/transcript/stream', (req, res) => {
   // Add client to set
   transcriptSSEClients.add(res);
 
-  // Send initial heartbeat
+  // Send initial heartbeat and current YouTube state (also re-syncs after a reconnect)
   res.write(': heartbeat\n\n');
+  res.write(`data: ${JSON.stringify(youtubeState())}\n\n`);
 
   // Keep connection alive with periodic heartbeats
   const heartbeat = setInterval(() => {
@@ -2485,6 +2561,93 @@ app.post('/api/audience-status', (req, res) => {
 });
 
 
+// ===== OPERATOR CONTROLS (YouTube pause, caption display) =====
+
+function youtubeState() {
+  return { type: 'youtube_status', configured: !!youtubePublisher.enabled, paused: youtubePaused };
+}
+
+function captionDisplayState() {
+  return { type: 'caption_display_status', enabled: captionDisplayEnabled };
+}
+
+/**
+ * Push control state to every admin page (WebSocket) and transcript page (SSE)
+ */
+function broadcastControlState() {
+  const messages = [youtubeState(), captionDisplayState()].map(m => JSON.stringify(m));
+  clientWebSockets.forEach(ws => {
+    if (ws.readyState === WebSocket.OPEN) {
+      messages.forEach(m => {
+        try { ws.send(m); } catch (e) { /* ignore */ }
+      });
+    }
+  });
+  transcriptSSEClients.forEach(client => {
+    try {
+      client.write(`data: ${messages[0]}\n\n`); // transcript page only shows YouTube state
+    } catch (e) {
+      transcriptSSEClients.delete(client);
+    }
+  });
+}
+
+app.get('/api/youtube-status', (req, res) => {
+  res.json(youtubeState());
+});
+
+/**
+ * Pause/resume sending captions to YouTube. Transcript and audience are unaffected.
+ * Body: { paused: true|false }
+ */
+app.post('/api/youtube-pause', (req, res) => {
+  if (typeof req.body.paused !== 'boolean') {
+    return res.status(400).json({ success: false, error: 'paused must be true or false' });
+  }
+  const paused = req.body.paused;
+  if (paused !== youtubePaused) {
+    youtubePaused = paused;
+    if (paused) {
+      youtubeSkippedWhilePaused = 0;
+      logger.info('⏸️ YouTube captions PAUSED by operator (transcript and audience still live)');
+    } else {
+      logger.info(`▶️ YouTube captions RESUMED by operator (${youtubeSkippedWhilePaused} line(s) were not sent while paused)`);
+    }
+    broadcastControlState();
+  }
+  res.json({ success: true, ...youtubeState() });
+});
+
+/**
+ * Start/stop the caption display (captions.html). When stopped, no text is built or sent to it.
+ * Body: { enabled: true|false }
+ */
+app.post('/api/caption-display', (req, res) => {
+  if (typeof req.body.enabled !== 'boolean') {
+    return res.status(400).json({ success: false, error: 'enabled must be true or false' });
+  }
+  const enabled = req.body.enabled;
+  if (enabled !== captionDisplayEnabled) {
+    captionDisplayEnabled = enabled;
+    if (enabled) {
+      logger.info('📺 Caption display started');
+      if (activeSession) {
+        broadcastOverlay(activeSession.segmenter.overlaySnapshot());
+        activeSession.segmenter.overlayChanged(); // mark as sent
+      }
+    } else {
+      logger.info('📺 Caption display stopped');
+      captionClients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          try { client.send(JSON.stringify({ type: 'clear' })); } catch (e) { /* ignore */ }
+        }
+      });
+    }
+    broadcastControlState();
+  }
+  res.json({ success: true, ...captionDisplayState() });
+});
+
 /**
  * Static assets. Only the logo is served; serving the whole directory would expose
  * server.log (contains connection details), captions.log and the source code.
@@ -2546,6 +2709,14 @@ wssClients.on('connection', (ws) => {
     }
   }, 100);
 
+  // Current YouTube / caption display state for the buttons
+  setTimeout(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(youtubeState()));
+      ws.send(JSON.stringify(captionDisplayState()));
+    }
+  }, 100);
+
   ws.on('message', (message) => {
     try {
       // Check if message is a string (JSON) or binary
@@ -2602,7 +2773,10 @@ wssClients.on('connection', (ws) => {
         }
 
         // Update YouTube publisher if URL provided
-        if (youtubeCaptionUrl && youtubeCaptionUrl.trim().length > 0) {
+        if (youtubeCaptionUrl && youtubeCaptionUrl.trim() === youtubePublisher.postUrl) {
+          // Same stream: keep the publisher so YouTube's sequence numbers keep counting up
+          console.log('📺 YouTube captions URL unchanged - continuing sequence');
+        } else if (youtubeCaptionUrl && youtubeCaptionUrl.trim().length > 0) {
           youtubePublisher = new YouTubeCaptionPublisher(youtubeCaptionUrl.trim(), YOUTUBE_CAPTIONS_LANGUAGE);
           console.log('📺 YouTube captions URL updated from client settings');
           if (youtubePublisher.enabled) {
@@ -2613,6 +2787,7 @@ wssClients.on('connection', (ws) => {
           youtubePublisher = new YouTubeCaptionPublisher(null, YOUTUBE_CAPTIONS_LANGUAGE);
           console.log('📺 YouTube captions disabled (no URL provided)');
         }
+        broadcastControlState();
 
         // A user start resets the reconnect backoff
         reconnectAttempts = 0;
@@ -2773,7 +2948,7 @@ wssCaptions.on('connection', (ws) => {
   captionClients.add(ws);
 
   // Repaint a (re)connected overlay immediately with the current text
-  if (activeSession) {
+  if (captionDisplayEnabled && activeSession) {
     try {
       ws.send(JSON.stringify(activeSession.segmenter.overlaySnapshot()));
     } catch (error) {
@@ -2861,6 +3036,11 @@ function emitSegment(segment) {
   const timestamp = nextCaptionTimestamp();
   logCaption(text, true, '', timestamp);
   broadcastToAudience(text, true, timestamp);
+  if (youtubePaused) {
+    // Dropped, not queued: sent later they would be out of sync (or too old for YouTube)
+    if (youtubePublisher.enabled) youtubeSkippedWhilePaused++;
+    return;
+  }
   youtubePublisher.publish(text).catch(() => {
     // Error already logged in publish method
   });
@@ -2874,6 +3054,7 @@ function emitSegments(session, segments) {
 }
 
 function publishOverlay(session) {
+  if (!captionDisplayEnabled) return; // nobody should be shown captions: skip the work
   if (session.segmenter.overlayChanged()) {
     broadcastOverlay(session.segmenter.overlaySnapshot());
   }
