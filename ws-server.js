@@ -226,6 +226,7 @@ let endedCaptionsTimer = null;
 
 // Service status tracking (for audience status display)
 let serviceStatus = {
+  type: 'status',
   status: 'offline',  // 'offline', 'connecting', 'ready', 'paused', 'ended'
   message: 'Service has not started yet',
   timestamp: new Date().toISOString()
@@ -685,7 +686,7 @@ function broadcastServiceStatus(status, message) {
  */
 // Home page - serve audience page
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'audience.html'));
+  res.type('html').send(AUDIENCE_PAGE);
 });
 
 // Client/admin page

@@ -764,6 +764,11 @@
           captionsList.style.display = 'none';
         }
         loadingState.style.display = 'none';
+      } else if (status === 'connecting') {
+        // Starting, or reconnecting mid-service: captions already on screen stay there
+        serviceStatus.style.display = captions.length > 0 ? 'none' : 'block';
+        captionsList.style.display = captions.length > 0 ? 'flex' : 'none';
+        loadingState.style.display = 'none';
       } else if (status === 'ready' || status === 'live') {
         // Service is live - always show captions list (captions will arrive via SSE)
         // Don't wait for captions.length > 0 because they're sent after status
