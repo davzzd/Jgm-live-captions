@@ -228,7 +228,7 @@ let endedCaptionsTimer = null;
 let serviceStatus = {
   type: 'status',
   status: 'offline',  // 'offline', 'connecting', 'ready', 'paused', 'ended'
-  message: 'Service has not started yet',
+  message: "Translation hasn't started yet",
   timestamp: new Date().toISOString()
 };
 
@@ -3620,11 +3620,11 @@ wssClients.on('connection', (ws) => {
         console.log(`🎬 Client requested to start Soniox connection: ${sourceLanguage} → ${targetLanguage}`);
 
         // Broadcast to audience that service is starting
-        broadcastServiceStatus('connecting', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
+        broadcastServiceStatus('connecting', SERVICE_DISCLAIMER);
 
         // Validate inputs
         if (!apiKey || apiKey.trim().length === 0) {
-          broadcastServiceStatus('offline', 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.');
+          broadcastServiceStatus('offline', SERVICE_DISCLAIMER);
           ws.send(JSON.stringify({
             type: 'soniox_status',
             status: 'error',
@@ -3844,7 +3844,7 @@ function broadcastSonioxStatus(status, message = '') {
  * replaced or stopped socket see `activeSession !== session` and do nothing.
  */
 
-const SERVICE_DISCLAIMER = 'Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
+const SERVICE_DISCLAIMER = "Live translation runs during the talk only, so it won't be on during worship. Your captions will appear here when the talk begins. This translation service is for those joining us in the church. Translation is automated and about 95% accurate, so some captions may not be perfect.";
 
 // Overlay state of the last session, so a reconnect keeps the Resolume text on screen
 let lastOverlay = null;
