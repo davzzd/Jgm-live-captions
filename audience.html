@@ -308,7 +308,17 @@
       max-width: 500px;
       margin: 0 auto;
     }
-    
+
+    /* Under the captions rather than alone on the page */
+    .empty-state.with-captions {
+      padding: 24px var(--spacing) 96px;
+    }
+
+    .captions-list.with-banner {
+      min-height: 0;
+      padding-bottom: 24px;
+    }
+
     .empty-state-icon {
       width: 64px;
       height: 64px;
@@ -570,6 +580,8 @@
       </div>
     </div>
     
+    <div id="captionsList" class="captions-list" style="display: none;"></div>
+
     <!-- Service Status Banner -->
     <div id="serviceStatus" class="empty-state" style="display: none;">
       <div class="empty-state-icon" id="serviceStatusIcon">
@@ -583,8 +595,6 @@
         <span id="serviceStatusMessage">Checking status...</span>
       </div>
     </div>
-    
-    <div id="captionsList" class="captions-list" style="display: none;"></div>
   </main>
 
   <!-- Offline Banner -->
@@ -595,20 +605,15 @@
   <!-- Scroll to Bottom Button -->
   <button id="scrollBottom" class="scroll-bottom" aria-label="Scroll to bottom">↓</button>
 
+  <!-- follow-scroll -->
   <script>
     // ===== CONFIGURATION =====
-    const AUTO_SCROLL_THRESHOLD = 100; // px from bottom to auto-scroll
     const MAX_CAPTIONS = 50; // Maximum number of captions to keep in memory/DOM (sliding window) - optimized for mobile
     
     // ===== STATE =====
     let captions = [];
     let eventSource = null;
     let reconnectAttempts = 0;
-    let isAtBottom = true;
-    let isUserScrolling = false;
-    let scrollTimeout = null;
-    let autoScrollTimeout = null; // Debounced auto-scroll timeout
-    let lastScrollTop = 0;
     let lastMessageTime = Date.now(); // Track last message received
     let healthCheckInterval = null; // Connection health monitoring
     
@@ -623,9 +628,28 @@
     const statusText = document.getElementById('statusText');
     const offlineBanner = document.getElementById('offlineBanner');
     const scrollBottomBtn = document.getElementById('scrollBottom');
-    
+
+    // ===== AUTO-SCROLL =====
+    const follow = createFollowScroll({
+      watch: [document.querySelector('.container')],
+      onChange: (following) => {
+        scrollBottomBtn.classList.toggle('show', !following);
+        if (following) removeOldCaptions(); // held back while the reader was further up
+        updateFocusClasses();
+      }
+    });
+
     // ===== SERVICE STATUS =====
     let currentServiceStatus = 'offline';
+
+    // Statuses whose message shows below the captions; the rest replace them or show nothing
+    const bannerWithCaptions = ['paused', 'ended', 'custom'];
+
+    function syncBanner() {
+      const alongside = bannerWithCaptions.includes(currentServiceStatus) && captions.length > 0;
+      serviceStatus.classList.toggle('with-captions', alongside);
+      captionsList.classList.toggle('with-banner', alongside);
+    }
     
     // ===== UTILITY FUNCTIONS =====
     
@@ -642,99 +666,6 @@
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
-    }
-    
-    function checkScrollPosition() {
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      const scrollHeight = document.documentElement.scrollHeight;
-      const clientHeight = document.documentElement.clientHeight;
-      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-      
-      // Detect if this is a user scroll (not programmatic)
-      const scrollDelta = scrollTop - lastScrollTop;
-      const absDelta = Math.abs(scrollDelta);
-      
-      // Only detect as user scrolling if:
-      // 1. Scroll delta is significant (> 10px to avoid false positives from auto-scroll)
-      // 2. User scrolled UP (not down, which could be auto-scroll)
-      // 3. Not already at bottom (auto-scroll only happens when at bottom)
-      const isScrollingUp = scrollDelta < -10;
-      const isScrollingDown = scrollDelta > 10;
-      const wasAtBottom = isAtBottom;
-      const nowAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
-      
-      // User manually scrolled UP from bottom - disable auto-scroll
-      if (wasAtBottom && !nowAtBottom && isScrollingUp && absDelta > 10) {
-        isUserScrolling = true;
-        isAtBottom = false;
-        // Clear any pending auto-scroll
-        if (autoScrollTimeout) {
-          clearTimeout(autoScrollTimeout);
-          autoScrollTimeout = null;
-        }
-      } else if (nowAtBottom) {
-        // At bottom - always enable auto-scroll unless user explicitly scrolled up
-        if (!(wasAtBottom && !nowAtBottom && isScrollingUp)) {
-          isAtBottom = true;
-          // If user scrolled back to bottom, reset user scrolling flag
-          if (!wasAtBottom && nowAtBottom && isUserScrolling) {
-            isUserScrolling = false;
-          }
-        }
-      }
-      
-      // Update lastScrollTop
-      lastScrollTop = scrollTop;
-      
-      // Clear/reset user scrolling timeout
-      if (scrollTimeout) {
-        clearTimeout(scrollTimeout);
-      }
-      if (isUserScrolling) {
-        scrollTimeout = setTimeout(() => {
-          // Only reset if still at bottom (user might have scrolled back)
-          if (isAtBottom) {
-            isUserScrolling = false;
-          }
-        }, 200);
-      }
-      
-      // Show/hide scroll to bottom button (show when NOT at bottom)
-      if (!isAtBottom) {
-        scrollBottomBtn.classList.add('show');
-      } else {
-        scrollBottomBtn.classList.remove('show');
-      }
-      
-      // Update focus classes on scroll for blur effect
-      updateFocusClasses();
-    }
-    
-    function scrollToBottom(smooth = true) {
-      // Mark as programmatic scroll (not user-initiated)
-      // Don't set isUserScrolling to false here - let checkScrollPosition handle it
-      
-      const targetScroll = document.documentElement.scrollHeight;
-      
-      window.scrollTo({
-        top: targetScroll,
-        behavior: smooth ? 'smooth' : 'auto'
-      });
-      
-      // Immediately update isAtBottom for smooth scrolling
-      // This ensures rapid updates don't miss the bottom state
-      isAtBottom = true;
-      lastScrollTop = targetScroll;
-      
-      // Verify after scroll completes
-      setTimeout(() => {
-        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-        const scrollHeight = document.documentElement.scrollHeight;
-        const clientHeight = document.documentElement.clientHeight;
-        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-        isAtBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
-        lastScrollTop = scrollTop;
-      }, smooth ? 300 : 50);
     }
     
     // ===== CAPTION RENDERING =====
@@ -767,9 +698,9 @@
           color: '#ff9800' 
         },
         'ended': { 
-          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>', 
-          title: 'Service Ended', 
-          color: '#9e9e9e' 
+          icon: '',
+          title: 'Thank you for joining us',
+          color: '#5b8def'  
         },
         'starting_soon': { 
           icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', 
@@ -806,6 +737,7 @@
       }
       
       serviceStatusIcon.innerHTML = config.icon;
+      serviceStatusIcon.style.display = config.icon ? '' : 'none';
       serviceStatusTitle.textContent = config.title;
       if (useHTML) {
         serviceStatusMessage.innerHTML = displayMessage;
@@ -815,16 +747,16 @@
       serviceStatusIcon.style.color = config.color;
       
       // Control visibility based on status
-      // Hide captions only when service is offline, ended, or starting_soon (NOT paused)
-      const hideCaptionStatuses = ['offline', 'ended', 'starting_soon'];
-      
+      // Hide captions only before the service. After it, they stay readable.
+      const hideCaptionStatuses = ['offline', 'starting_soon'];
+
       if (hideCaptionStatuses.includes(status)) {
         // Service not active - show status message, hide captions
         serviceStatus.style.display = 'block';
         captionsList.style.display = 'none';
         loadingState.style.display = 'none';
-      } else if (status === 'paused') {
-        // Paused - show captions (don't clear them), but show status message too
+      } else if (bannerWithCaptions.includes(status)) {
+        // Show captions (don't clear them), with the status message below them
         serviceStatus.style.display = 'block';
         if (captions.length > 0) {
           captionsList.style.display = 'flex';
@@ -846,6 +778,9 @@
           });
         }
       }
+
+      syncBanner();
+      if (!statusDot.classList.contains('disconnected')) updateStatus(true);
     }
     
     function updateFocusClasses() {
@@ -854,11 +789,7 @@
       const items = Array.from(captionsList.querySelectorAll('.caption-item'));
       const totalItems = items.length;
       
-      // Check if user is at bottom
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      const scrollHeight = document.documentElement.scrollHeight;
-      const clientHeight = document.documentElement.clientHeight;
-      const atBottom = (scrollHeight - scrollTop - clientHeight) < AUTO_SCROLL_THRESHOLD;
+      const atBottom = follow.isFollowing();
       
       items.forEach((item, index) => {
         // Remove all focus classes
@@ -915,8 +846,9 @@
     // ===== SLIDING WINDOW MANAGEMENT =====
     
     function removeOldCaptions() {
-      // Remove oldest captions if we exceed the limit
-      if (captions.length > MAX_CAPTIONS) {
+      // Remove oldest captions if we exceed the limit, but not while someone is reading further
+      // up: the text would move under them
+      if (captions.length > MAX_CAPTIONS && follow.isFollowing()) {
         const removeCount = captions.length - MAX_CAPTIONS;
         const removedCaptions = captions.splice(0, removeCount);
         
@@ -932,6 +864,7 @@
         });
         
         // Remove all elements at once (more efficient than individual removes)
+        follow.layoutShifted();
         elementsToRemove.forEach(element => element.remove());
         
         // Update data-index attributes for remaining elements (only if we removed any)
@@ -945,10 +878,11 @@
     }
     
     function renderCaptions(forceFullRender = false) {
-      // Don't show captions if service is offline, ended, or starting_soon
-      // But DO show captions if paused (they should remain visible)
-      const hideCaptionStatuses = ['offline', 'ended', 'starting_soon'];
-      
+      syncBanner();
+
+      // Don't show captions before the service
+      const hideCaptionStatuses = ['offline', 'starting_soon'];
+
       if (hideCaptionStatuses.includes(currentServiceStatus)) {
         captionsList.style.display = 'none';
         serviceStatus.style.display = 'block';
@@ -957,8 +891,8 @@
         return;
       }
       
-      // If paused but captions exist, show them
-      if (currentServiceStatus === 'paused' && captions.length === 0) {
+      // Nothing to show under the message yet
+      if (bannerWithCaptions.includes(currentServiceStatus) && captions.length === 0) {
         captionsList.style.display = 'none';
         serviceStatus.style.display = 'block';
         loadingState.style.display = 'none';
@@ -974,9 +908,9 @@
       }
       
       loadingState.style.display = 'none';
-      serviceStatus.style.display = 'none';
+      serviceStatus.style.display = bannerWithCaptions.includes(currentServiceStatus) ? 'block' : 'none';
       captionsList.style.display = 'flex';
-      
+
       // Apply sliding window before rendering
       removeOldCaptions();
       
@@ -1063,35 +997,9 @@
         updateFocusClasses();
       });
       
-      // Auto-scroll if user is at bottom (only if not manually scrolling)
-      // Use debounced approach to handle rapid updates
-      if (isAtBottom && !isUserScrolling) {
-        // Clear any pending auto-scroll to batch rapid updates
-        if (autoScrollTimeout) {
-          clearTimeout(autoScrollTimeout);
-        }
-        
-        // Schedule auto-scroll with minimal delay to batch rapid updates
-        autoScrollTimeout = setTimeout(() => {
-          // Double-check user hasn't scrolled during the delay
-          if (isUserScrolling) {
-            return; // User scrolled, don't auto-scroll
-          }
-          
-          // Always scroll to bottom when at bottom (aggressive auto-scroll)
-          // Use requestAnimationFrame for smooth, immediate scrolling
-          requestAnimationFrame(() => {
-            // Final check before scrolling
-            if (!isUserScrolling) {
-              scrollToBottom(true);
-              // Update focus after scroll completes
-              setTimeout(updateFocusClasses, 100);
-            }
-          });
-        }, 5); // Very short delay (5ms) to batch rapid updates but still be responsive
-      }
+      follow.pin();
     }
-    
+
     function deleteCaption(timestamp) {
       // Remove caption from array
       const index = captions.findIndex(c => c.timestamp === timestamp);
@@ -1124,7 +1032,7 @@
     function updateStatus(connected) {
       if (connected) {
         statusDot.classList.remove('disconnected');
-        statusText.textContent = 'Live';
+        statusText.textContent = currentServiceStatus === 'ended' ? 'Ended' : 'Live';
         offlineBanner.classList.remove('show');
         reconnectAttempts = 0;
       } else {
@@ -1219,6 +1127,7 @@
             renderedCaptions.clear();
             captionsList.innerHTML = '';
             renderCaptions(true);
+            follow.resume();
           } else if (data.type === 'delete') {
             // Caption deletion
             deleteCaption(data.timestamp);
@@ -1230,9 +1139,10 @@
             // When ANY caption arrives, automatically show captions (hide status message)
             // Translation has started, so show captions regardless of status
             if (captions.length === 1) {
-              serviceStatus.style.display = 'none';
+              serviceStatus.style.display = bannerWithCaptions.includes(currentServiceStatus) ? 'block' : 'none';
               captionsList.style.display = 'flex';
               loadingState.style.display = 'none';
+              syncBanner();
             }
           }
         } catch (error) {
@@ -1268,26 +1178,17 @@
     // Throttle scroll events for performance
     let focusUpdateTimeout;
     window.addEventListener('scroll', () => {
-      checkScrollPosition();
       // Throttle focus updates
       clearTimeout(focusUpdateTimeout);
       focusUpdateTimeout = setTimeout(updateFocusClasses, 50);
     }, { passive: true });
-    
-    // Initialize lastScrollTop on page load
-    lastScrollTop = window.pageYOffset || document.documentElement.scrollTop;
     
     // Also update on resize
     window.addEventListener('resize', () => {
       updateFocusClasses();
     }, { passive: true });
     
-    scrollBottomBtn.addEventListener('click', () => {
-      // User clicked scroll to bottom - re-enable auto-scroll
-      isAtBottom = true;
-      isUserScrolling = false;
-      scrollToBottom(true);
-    });
+    scrollBottomBtn.addEventListener('click', () => follow.resume());
     
     // Handle page visibility changes (tab background/foreground)
     document.addEventListener('visibilitychange', () => {
@@ -1295,8 +1196,6 @@
         // Tab became visible - check connection health
         const timeSinceLastMessage = Date.now() - lastMessageTime;
         
-        // Re-check scroll position and focus
-        checkScrollPosition();
         updateFocusClasses();
         
         // If no connection or connection appears stale, reconnect
@@ -1324,8 +1223,6 @@
       if (event.persisted || document.visibilityState === 'visible') {
         const timeSinceLastMessage = Date.now() - lastMessageTime;
         
-        // Re-sync UI state
-        checkScrollPosition();
         updateFocusClasses();
         
         // If been away for a while, reconnect
@@ -1373,21 +1270,11 @@
     // Start connection
     connect();
     
-    // Initialize scroll state
-    lastScrollTop = window.pageYOffset || document.documentElement.scrollTop;
-    isAtBottom = true; // Assume at bottom on initial load
-    isUserScrolling = false;
-    
-    // Initial scroll check
-    checkScrollPosition();
-    
     // Initial focus update
     setTimeout(updateFocusClasses, 200);
     
     // Ensure we're at bottom on initial load
-    setTimeout(() => {
-      scrollToBottom(false); // Instant scroll to bottom on load
-    }, 100);
+    setTimeout(() => follow.resume(), 100);
   </script>
 </body>
 </html>

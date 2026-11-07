@@ -20,6 +20,11 @@ const { CaptionSegmenter, sanitizeCaptionText } = require('./segmenter');
 const { CaptionQueue } = require('./caption-queue');
 const { Corrections } = require('./corrections');
 
+// Built into the pages rather than served as a file: see the note in follow-scroll.js
+const FOLLOW_SCROLL_JS = fs.readFileSync(path.join(__dirname, 'follow-scroll.js'), 'utf8');
+const AUDIENCE_PAGE = fs.readFileSync(path.join(__dirname, 'audience.html'), 'utf8')
+  .replace('<!-- follow-scroll -->', () => `<script>${FOLLOW_SCROLL_JS}</script>`);
+
 // Load .env file from the same directory as this script
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -213,6 +218,11 @@ const YOUTUBE_CAPTIONS_LANGUAGE = process.env.LANGUAGE || 'en';
 // Token system removed - using simple /audience endpoint
 let audienceCaptionBuffer = []; // Last 6 captions for audience display (kept for backwards compat)
 // No limit - show all captions to audience (scrollable)
+
+// How long phones can still read the captions after the service, before they are cleared
+const ENDED_CAPTIONS_KEEP_MS = 60 * 60 * 1000;
+const SERVICE_ENDED_MESSAGE = 'Live translation has ended.';
+let endedCaptionsTimer = null;
 
 // Service status tracking (for audience status display)
 let serviceStatus = {
@@ -645,6 +655,12 @@ function broadcastToAudience(text, isFinal = false, timestamp = nextCaptionTimes
  * Shows pre-service, live, paused, ended states
  */
 function broadcastServiceStatus(status, message) {
+  // Translation restarted, so what's on the phones is still the current service
+  if (status !== 'ended' && endedCaptionsTimer) {
+    clearTimeout(endedCaptionsTimer);
+    endedCaptionsTimer = null;
+  }
+
   serviceStatus = {
     type: 'status',
     status: status,  // 'offline', 'connecting', 'ready', 'paused', 'ended'
@@ -2064,6 +2080,7 @@ app.get('/transcript', (req, res) => {
               </div>
             </div>
           </div>
+          <script>${FOLLOW_SCROLL_JS}</script>
           <script>
             // Fix server-rendered timestamps to match client locale/timezone
             // This ensures initial loading captions match the timezone of live SSE captions
@@ -2078,31 +2095,23 @@ app.get('/transcript', (req, res) => {
               }
             });
 
-            // Smart autoscroll state
-            let isUserScrolling = false;
-            let autoScrollEnabled = true;
-            let scrollTimeout;
+            // Auto-scroll. Stays put while a line is being edited, so the text doesn't move
+            // under the cursor; transcript-review.js calls smartScroll for the queue too.
+            const follow = createFollowScroll({
+              watch: [document.getElementById('captionsContainer'), document.getElementById('queueContainer')],
+              isHeld: () => !!document.querySelector('.caption-item.editing, .queue-item textarea:focus'),
+              onChange: (following) => { if (following) clearNewLines(); }
+            });
 
-            // Detect if user is at bottom of page
-            function isAtBottom() {
-              const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-              const windowHeight = window.innerHeight;
-              const documentHeight = document.documentElement.scrollHeight;
-              return (documentHeight - (scrollTop + windowHeight)) < 100; // Within 100px of bottom
-            }
-
-            // Smart scroll: only autoscroll if user is at bottom
             function smartScroll() {
-              if (autoScrollEnabled && isAtBottom()) {
-                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-              }
+              follow.pin();
             }
 
             // "↓ N new lines" button when new captions arrive while scrolled up
             let newLinesSinceScroll = 0;
             const newLinesBtn = document.getElementById('newLinesBtn');
             function noteNewLine() {
-              if (isAtBottom()) return;
+              if (follow.isFollowing()) return;
               newLinesSinceScroll++;
               newLinesBtn.textContent = '↓ ' + newLinesSinceScroll + ' new line' + (newLinesSinceScroll === 1 ? '' : 's');
               newLinesBtn.style.display = '';
@@ -2135,26 +2144,6 @@ app.get('/transcript', (req, res) => {
               liveDot.className = 'live-dot ' + (on ? 'on' : 'off');
               liveText.textContent = on ? 'Live' : 'Reconnecting…';
             }
-
-            // Track user scrolling
-            window.addEventListener('scroll', () => {
-              clearTimeout(scrollTimeout);
-              
-              // Check if user scrolled away from bottom
-              if (!isAtBottom()) {
-                autoScrollEnabled = false;
-              } else {
-                // User scrolled back to bottom, re-enable autoscroll
-                autoScrollEnabled = true;
-                clearNewLines();
-              }
-              
-              // Mark as user scrolling
-              isUserScrolling = true;
-              scrollTimeout = setTimeout(() => {
-                isUserScrolling = false;
-              }, 150);
-            });
 
             // Handle export dropdown
             document.getElementById('exportFormat').addEventListener('change', function(e) {
@@ -2194,8 +2183,7 @@ app.get('/transcript', (req, res) => {
             });
 
             function scrollToBottom() {
-              autoScrollEnabled = true;
-              window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+              follow.resume();
             }
 
             function clearCaptions() {
@@ -2981,7 +2969,7 @@ app.get('/logs/stream', (req, res) => {
  */
 app.get('/audience', (req, res) => {
   // Serve audience.html (public access)
-  res.sendFile(path.join(__dirname, 'audience.html'));
+  res.type('html').send(AUDIENCE_PAGE);
 });
 
 /**
@@ -3004,9 +2992,10 @@ app.get('/audience/stream', (req, res) => {
   // Send initial service status
   res.write(`data: ${JSON.stringify(serviceStatus)}\n\n`);
 
-  // Only send captions if service is live/ready (not offline, starting_soon, paused, or ended)
+  // Only send captions if service is live/ready, or has just ended and they are still readable
+  // (not offline, starting_soon or paused)
   const activeStatuses = ['ready', 'live'];
-  if (activeStatuses.includes(serviceStatus.status)) {
+  if (activeStatuses.includes(serviceStatus.status) || endedCaptionsTimer) {
     // Read last N captions from file (optimized for mobile - only send last 50)
     const MAX_INITIAL_CAPTIONS = 50; // Limit initial load for mobile performance
     try {
@@ -3097,6 +3086,42 @@ app.get('/api/audience-token', (req, res) => {
 });
 
 /**
+ * Remove the captions from every phone (the transcript and captions.log are not affected)
+ */
+function clearAudienceCaptions() {
+  try {
+    captionHistory.length = 0;
+    audienceCaptionBuffer = [];
+
+    const clearEvent = JSON.stringify({ type: 'clear' });
+    audienceSSEClients.forEach(client => {
+      try {
+        client.write(`data: ${clearEvent}\n\n`);
+      } catch (error) {
+        // Client disconnected
+      }
+    });
+
+    console.log('Cleared captions from audience (service ended)');
+  } catch (error) {
+    console.error('Failed to clear captions:', error);
+  }
+}
+
+/**
+ * The Stop button and the Service Ended button both end up here. The captions stay readable
+ * for a while, then clear: the translation is meant for people in the church.
+ */
+function endService() {
+  broadcastServiceStatus('ended', SERVICE_ENDED_MESSAGE);
+  clearTimeout(endedCaptionsTimer);
+  endedCaptionsTimer = setTimeout(() => {
+    endedCaptionsTimer = null;
+    clearAudienceCaptions();
+  }, ENDED_CAPTIONS_KEEP_MS);
+}
+
+/**
  * Admin API: Manually set audience status
  * Allows admin to control what message audience sees
  */
@@ -3107,31 +3132,12 @@ app.post('/api/audience-status', (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing status or message' });
   }
 
-  // Clear captions when service ends (not when paused)
-  if (status === 'ended') {
-    try {
-      // Clear in-memory buffers
-      captionHistory.length = 0;
-      audienceCaptionBuffer = [];
-
-      // Broadcast clear event to all audience viewers
-      const clearEvent = JSON.stringify({ type: 'clear' });
-      audienceSSEClients.forEach(client => {
-        try {
-          client.write(`data: ${clearEvent}\n\n`);
-        } catch (error) {
-          // Client disconnected
-        }
-      });
-
-      console.log('🧹 Cleared captions from audience (service ended)');
-    } catch (error) {
-      console.error('Failed to clear captions:', error);
-    }
-  }
-
   // Update service status and broadcast to audience
-  broadcastServiceStatus(status, message);
+  if (status === 'ended') {
+    endService();
+  } else {
+    broadcastServiceStatus(status, message);
+  }
 
   console.log(`📢 Manual audience status set: ${status} - ${message}`);
 
@@ -3660,8 +3666,7 @@ wssClients.on('connection', (ws) => {
       } else if (data.type === 'stop_soniox') {
         // Client requesting to stop Soniox connection
         console.log('🛑 Client requested to stop Soniox connection');
-        broadcastServiceStatus('ended', 'Service has ended');
-        endSonioxSession(); // lets Soniox finalize the last words first
+        endSonioxSession(endService); // lets Soniox finalize the last words first
       } else if (data.type === 'get_soniox_status') {
         // Client requesting current Soniox status
         ws.send(JSON.stringify({
