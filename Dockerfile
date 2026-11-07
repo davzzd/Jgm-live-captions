@@ -16,6 +16,7 @@ COPY segmenter.js ./
 COPY caption-queue.js ./
 COPY corrections.js ./
 COPY transcript-review.js ./
+COPY follow-scroll.js ./
 COPY captions.html ./
 COPY client.html ./
 COPY audience.html ./
