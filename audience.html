@@ -183,6 +183,17 @@
       }
     }
     
+    .status-dot.waiting {
+      background: #ffc107;
+      box-shadow: 0 0 8px rgba(255, 193, 7, 0.5);
+    }
+
+    .status-dot.ended {
+      background: #9e9e9e;
+      box-shadow: none;
+      animation: none;
+    }
+
     .status-dot.disconnected {
       background: #ef5350;
       box-shadow: 0 0 8px rgba(239, 83, 80, 0.5);
@@ -505,12 +516,12 @@
       transform: translateY(100%);
       transition: transform var(--transition-smooth);
       z-index: 200;
-      box-shadow: 0 -4px 20px rgba(239, 83, 80, 0.3);
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
     }
     
     .offline-banner.show {
+      box-shadow: 0 -4px 20px rgba(239, 83, 80, 0.3);
       transform: translateY(0);
     }
     
@@ -563,7 +574,7 @@
         <img src="/Logo.png" alt="JGM Live Translation" class="title-logo">
       </div>
       <div class="status">
-        <div class="status-dot" id="statusDot"></div>
+        <div class="status-dot waiting" id="statusDot"></div>
         <span id="statusText">Connecting...</span>
       </div>
     </div>
@@ -575,8 +586,9 @@
       <div class="loading-spinner"></div>
       <div class="loading-text">Connecting to live stream...</div>
       <div class="loading-disclaimer" style="margin-top: 30px; font-size: 16px; color: rgba(255, 255, 255, 0.8); line-height: 1.8; max-width: 600px; margin-left: auto; margin-right: auto; font-weight: 500;">
-        This translation service is only for the audience present in the church and not for online viewers.<br><br>
-        Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.
+        Live translation runs during the talk only, so it won't be on during worship. Your captions will appear here when the talk begins.<br><br>
+        This translation service is for those joining us in the church.<br><br>
+        Translation is automated and about 95% accurate, so some captions may not be perfect.
       </div>
     </div>
     
@@ -678,9 +690,9 @@
       
       const statusConfig = {
         'offline': { 
-          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>', 
-          title: 'Service Not Started', 
-          color: '#ef5350' 
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', 
+          title: "Translation hasn't started yet",
+          color: '#ffc107' 
         },
         'connecting': { 
           icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>', 
@@ -722,19 +734,12 @@
       const config = statusConfig[status] || statusConfig['offline'];
       
       // Default disclaimer message for pre-translation states
-      const disclaimerMessage = 'This translation service is only for the audience present in the church and not for online viewers.<br><br>Translation will begin when the talk starts only. Please note: Automated translation is approximately 95% accurate. Some errors may occur and captions may not be perfect.';
+      const disclaimerMessage = "Live translation runs during the talk only, so it won't be on during worship. Your captions will appear here when the talk begins.<br><br>This translation service is for those joining us in the church.<br><br>Translation is automated and about 95% accurate, so some captions may not be perfect.";
       
-      // Use custom message if provided, otherwise use default or disclaimer
-      let displayMessage = message;
-      let useHTML = false;
-      if (!message || message === 'Service has not started yet' || message === 'Connecting...' || message.includes('Starting Soon')) {
-        // For pre-translation states, show disclaimer
-        const preTranslationStates = ['offline', 'connecting', 'starting_soon'];
-        if (preTranslationStates.includes(status)) {
-          displayMessage = disclaimerMessage;
-          useHTML = true;
-        }
-      }
+      // Before translation starts, always show the disclaimer; otherwise show the server's message
+      const preTranslationStates = ['offline', 'connecting', 'starting_soon'];
+      const useHTML = preTranslationStates.includes(status);
+      const displayMessage = useHTML ? disclaimerMessage : message;
       
       serviceStatusIcon.innerHTML = config.icon;
       serviceStatusIcon.style.display = config.icon ? '' : 'none';
@@ -1034,14 +1039,29 @@
     
     // ===== CONNECTION MANAGEMENT =====
     
+    // What the header shows while connected. A custom message leaves it as it was.
+    const WAITING = { text: 'Waiting', dot: 'waiting' };
+    const LIVE = { text: 'Live', dot: '' };
+    const headerStates = {
+      offline: WAITING,
+      starting_soon: WAITING,
+      connecting: WAITING,
+      ready: LIVE,
+      live: LIVE,
+      paused: { text: 'Paused', dot: 'waiting' },
+      ended: { text: 'Ended', dot: 'ended' }
+    };
+    let headerState = WAITING;
+
     function updateStatus(connected) {
       if (connected) {
-        statusDot.classList.remove('disconnected');
-        statusText.textContent = currentServiceStatus === 'ended' ? 'Ended' : 'Live';
+        headerState = headerStates[currentServiceStatus] || headerState;
+        statusDot.className = `status-dot ${headerState.dot}`;
+        statusText.textContent = headerState.text;
         offlineBanner.classList.remove('show');
         reconnectAttempts = 0;
       } else {
-        statusDot.classList.add('disconnected');
+        statusDot.className = 'status-dot disconnected';
         statusText.textContent = 'Offline';
         offlineBanner.classList.add('show');
       }
