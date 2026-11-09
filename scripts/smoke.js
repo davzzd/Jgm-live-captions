@@ -155,7 +155,7 @@ async function main() {
 
     // Every page answers
     const pages = {};
-    for (const p of ['/', '/audience', '/client', '/transcript', '/Logo.png']) {
+    for (const p of ['/', '/audience', '/client', '/transcript', '/portal', '/Logo.png']) {
       const res = await fetch(BASE + p);
       pages[p] = await res.text();
       check(`GET ${p}`, res.status === 200, `status ${res.status}`);
@@ -188,6 +188,16 @@ async function main() {
       await browser.open(BASE + p);
       check(`${p} loads with no page errors`, browser.errors.length === 0, browser.errors.join('; '));
     }
+
+    // Recorded-talk page: loads with the model and church context filled in
+    await browser.open(BASE + '/portal');
+    const portal = await browser.evaluate(`({
+      model: window.PORTAL_CONFIG && window.PORTAL_CONFIG.model,
+      context: !!(window.PORTAL_CONFIG && window.PORTAL_CONFIG.context),
+      form: !document.getElementById('setupView').hidden
+    })`);
+    check('/portal loads with no page errors', browser.errors.length === 0, browser.errors.join('; '));
+    check('/portal shows the form, with model and context', portal.form && portal.context && /^stt-async-/.test(portal.model || ''), JSON.stringify(portal));
   } finally {
     if (browser) browser.close();
     server.kill();
