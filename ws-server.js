@@ -4193,7 +4193,8 @@ function buildSonioxContext() {
       { key: "topic", value: "Pastoral Sermon" },
       { key: "setting", value: "Church worship service" },
       { key: "speaker_role", value: "Pastor / Preacher" },
-      { key: "pastors", value: "Pastor Rajesh Mathew Kottukapally, Pastor Tanya" }
+      { key: "pastors", value: "Pastor Rajesh Mathew Kottukapally, Pastor Tanya" },
+      { key: "church", value: "Cornerstone Church, Joshua Generation Ministries" }
     ],
 
     text: `
@@ -4208,6 +4209,7 @@ pastors commonly speak when preaching from the Bible.
     // Unusual names and spellings only: Soniox advises against listing common words
     terms: [
       "Rajesh Mathew Kottukapally", "Kottukapally", "Pastor Tanya",
+      "Cornerstone", "Cornerstone Church", "Joshua Generation Ministries",
       "Hallelujah", "Hosanna", "Messiah"
     ],
 
@@ -4219,7 +4221,9 @@ pastors commonly speak when preaching from the Bible.
       { source: "Holy Spirit", target: "Holy Spirit" },
       { source: "Word of God", target: "Word of God" },
       { source: "The Gospel", target: "The Gospel" },
-      { source: "Kottukapally", target: "Kottukapally" }
+      { source: "Kottukapally", target: "Kottukapally" },
+      { source: "Cornerstone Church", target: "Cornerstone Church" },
+      { source: "Joshua Generation Ministries", target: "Joshua Generation Ministries" }
     ]
   };
 }
