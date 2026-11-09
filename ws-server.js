@@ -205,7 +205,7 @@ const wssCaptions = new WebSocket.Server({
 const SONIOX_WS_URL = process.env.SONIOX_WS_URL || 'wss://stt-rt.soniox.com/transcribe-websocket';
 // Fixed in code on purpose: a SONIOX_MODEL line in a server's .env once kept production on an
 // older model for months without anyone noticing. Change it here and deploy.
-const SONIOX_MODEL = 'stt-rt-v5';
+const SONIOX_MODEL = 'stt-rt-v6';
 const DEFAULT_SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
@@ -4112,7 +4112,7 @@ function shutdownSonioxConnection() {
 }
 
 /**
- * Stop the Soniox connection gracefully: send an empty frame so Soniox finalizes the last
+ * Stop the Soniox connection gracefully: send an empty text frame so Soniox finalizes the last
  * words, wait (bounded) for its `finished` response, emit everything, then close.
  */
 function endSonioxSession(done) {
@@ -4157,7 +4157,9 @@ function endSonioxSession(done) {
   clearInterval(session.keepaliveTimer);
   session.keepaliveTimer = null;
   try {
-    session.ws.send(Buffer.alloc(0)); // empty frame = end of audio
+    // An empty TEXT frame ends the stream. An empty binary frame is just empty audio:
+    // Soniox would wait, and the last words would never be finalized.
+    session.ws.send('');
   } catch (error) {
     finish();
     return;
@@ -4180,7 +4182,8 @@ function buildSonioxContext() {
       { key: "domain", value: "Church / Christianity" },
       { key: "topic", value: "Pastoral Sermon" },
       { key: "setting", value: "Church worship service" },
-      { key: "speaker_role", value: "Pastor / Preacher" }
+      { key: "speaker_role", value: "Pastor / Preacher" },
+      { key: "pastors", value: "Pastor Rajesh Mathew Kottukapally, Pastor Tanya" }
     ],
 
     text: `
@@ -4192,20 +4195,10 @@ The translation should sound natural to a church audience and reflect how
 pastors commonly speak when preaching from the Bible.
 `.trim(),
 
+    // Unusual names and spellings only: Soniox advises against listing common words
     terms: [
-      // Core biblical & church vocabulary
-      "Amen", "Hallelujah", "Praise the Lord", "Worship", "Prayer",
-      "Scripture", "The Word", "Word of God", "The Gospel",
-      "Salvation", "Redemption", "Grace", "Mercy", "Faith", "Repentance",
-      "Anointing", "Covenant", "Blessing", "Obedience",
-
-      // Names & titles
-      "Jesus", "Jesus Christ", "Christ", "Lord", "God", "Father",
-      "Holy Spirit", "Savior", "Messiah",
-
-      // Sermon-specific language
-      "Brothers and sisters", "Church", "Congregation",
-      "Testimony", "Calling", "Ministry", "Preaching"
+      "Rajesh Mathew Kottukapally", "Kottukapally", "Pastor Tanya",
+      "Hallelujah", "Hosanna", "Messiah"
     ],
 
     translation_terms: [
@@ -4215,7 +4208,8 @@ pastors commonly speak when preaching from the Bible.
       { source: "Jesus Christ", target: "Jesus Christ" },
       { source: "Holy Spirit", target: "Holy Spirit" },
       { source: "Word of God", target: "Word of God" },
-      { source: "The Gospel", target: "The Gospel" }
+      { source: "The Gospel", target: "The Gospel" },
+      { source: "Kottukapally", target: "Kottukapally" }
     ]
   };
 }
@@ -4229,7 +4223,6 @@ function buildSonioxConfig(config) {
   const endpointDelay = Number(process.env.SONIOX_MAX_ENDPOINT_DELAY_MS) || 2000;
 
   const sonioxConfig = {
-    api_key: config.apiKey,
     model: SONIOX_MODEL,
     audio_format: 's16le',
     sample_rate: 16000,
@@ -4340,7 +4333,11 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage, options = {}) {
   sonioxConnectionState = 'connecting';
   broadcastSonioxStatus('connecting', 'Establishing connection...');
 
-  const ws = new WebSocket(SONIOX_WS_URL);
+  // The key goes in the connection header, not the config message (Soniox stops accepting
+  // it there on 15 January 2027)
+  const ws = new WebSocket(SONIOX_WS_URL, {
+    headers: { Authorization: `Bearer ${config.apiKey}` }
+  });
   session.ws = ws;
 
   session.connectTimer = setTimeout(() => {
@@ -4385,7 +4382,7 @@ function connectToSoniox(apiKey, sourceLanguage, targetLanguage, options = {}) {
       return;
     }
     isSonioxConfigured = false; // set true on first response
-    console.log('📋 Config sent:', JSON.stringify({ ...sonioxConfig, api_key: '[redacted]', context: '[omitted]' }));
+    console.log('📋 Config sent:', JSON.stringify({ ...sonioxConfig, context: '[omitted]' }));
 
     // Soniox buffers audio while it processes the config, so audio can flow immediately
     sonioxConnectionState = 'connected';
