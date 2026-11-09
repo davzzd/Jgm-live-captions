@@ -1,19 +1,36 @@
 name: Deploy to Linode
 
-# Deploys on every push to main. Also runnable manually from the Actions tab.
+# Deploys on every push to main, once the checks pass. Also runnable manually from the
+# Actions tab. Pull requests only run the checks.
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
-# Never let two deploys run at once (avoids a half-built container).
-concurrency:
-  group: deploy-production
-  cancel-in-progress: false
-
 jobs:
-  deploy:
+  check:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18 # same as the Docker image
+          cache: npm
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Pages load without errors
+        run: npm run smoke
+
+  deploy:
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # Never let two deploys run at once (avoids a half-built container).
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
       - name: Deploy over SSH
         env:
@@ -36,3 +53,13 @@ jobs:
                && docker compose -p jgm-live-captions up -d --build \
                && docker image prune -f \
                && docker compose -p jgm-live-captions ps"
+
+      - name: Live site is back up
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS -o /dev/null https://translate.joshuageneration.org/; then
+              echo "Live site answered"; exit 0
+            fi
+            sleep 3
+          done
+          echo "Live site did not answer within a minute"; exit 1
