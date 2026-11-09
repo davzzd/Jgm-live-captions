@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Talk Transcription</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      color-scheme: dark;
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --panel-raised: #212c3d;
+      --line: rgba(168, 180, 200, 0.14);
+      --text: #f3f6fa;
+      --text-secondary: #a8b4c8;
+      --text-muted: #7b89a3;
+      --accent: #5b8def;
+      --accent-hover: #7ba3f5;
+      --accent-soft: rgba(91, 141, 239, 0.14);
+      --success: #4caf7a;
+      --danger: #ef6b6b;
+      --danger-soft: rgba(239, 107, 107, 0.12);
+      --shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+      --radius: 14px;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --bg: #f4f6f9;
+        --panel: #ffffff;
+        --panel-raised: #f7f9fc;
+        --line: rgba(26, 35, 50, 0.1);
+        --text: #1a2332;
+        --text-secondary: #4a5568;
+        --text-muted: #6b7a90;
+        --accent: #4c6ef5;
+        --accent-hover: #3b5bdb;
+        --accent-soft: rgba(76, 110, 245, 0.1);
+        --success: #2f9e63;
+        --danger: #d64545;
+        --danger-soft: rgba(214, 69, 69, 0.08);
+        --shadow: 0 8px 30px rgba(26, 35, 50, 0.08);
+      }
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 40px 16px 64px;
+    }
+
+    header { margin-bottom: 28px; }
+    .logo { height: 30px; width: auto; display: block; margin-bottom: 20px; }
+    h1 { font-size: 26px; font-weight: 650; letter-spacing: -0.01em; }
+    .lead { color: var(--text-secondary); margin-top: 4px; }
+
+    .card {
+      background: var(--panel);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    .field + .field { margin-top: 20px; }
+    label, .label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+    .hint { font-size: 13px; color: var(--text-muted); margin-top: 6px; }
+
+    input[type="password"], input[type="text"], select {
+      width: 100%;
+      font: inherit;
+      font-size: 16px;
+      color: var(--text);
+      background: var(--panel-raised);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 11px 14px;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%), linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+      background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 40px; }
+    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+    .key-row { display: flex; gap: 8px; }
+    .key-row input { flex: 1; min-width: 0; }
+
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 520px) { .row { grid-template-columns: 1fr; } }
+
+    .drop {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 6px;
+      min-height: 150px;
+      padding: 24px;
+      border: 1.5px dashed var(--line);
+      border-radius: 12px;
+      background: var(--panel-raised);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop:hover, .drop.dragging { border-color: var(--accent); background: var(--accent-soft); }
+    .drop:focus-within { border-color: var(--accent); }
+    .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .drop-title { font-weight: 600; }
+    .drop-sub { font-size: 14px; color: var(--text-muted); }
+    .drop.has-file .drop-title { color: var(--text); }
+
+    button {
+      font: inherit;
+      font-weight: 600;
+      font-size: 16px;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 20px;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s, transform 0.05s;
+    }
+    button:active { transform: translateY(1px); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .primary { background: var(--accent); color: #fff; }
+    .primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .secondary { background: var(--panel-raised); color: var(--text); border: 1px solid var(--line); }
+    .secondary:hover:not(:disabled) { border-color: var(--accent); }
+    .quiet { background: transparent; color: var(--text-secondary); padding: 10px 14px; }
+    .quiet:hover { color: var(--text); }
+    .actions { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+    .actions .primary { flex: 1; min-width: 180px; }
+
+    /* Progress */
+    .steps { list-style: none; display: grid; gap: 18px; }
+    .step { display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: start; color: var(--text-muted); }
+    .dot {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 2px solid var(--line);
+      display: grid; place-items: center;
+      font-size: 14px; font-weight: 700;
+    }
+    .step.active { color: var(--text); }
+    .step.active .dot { border-color: var(--accent); color: var(--accent); }
+    .step.active .dot::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+    .step.done { color: var(--text-secondary); }
+    .step.done .dot { border-color: var(--success); background: var(--success); color: #fff; }
+    .step.done .dot::after { content: '✓'; }
+    .step-title { font-weight: 600; line-height: 28px; }
+    .step-detail { font-size: 14px; color: var(--text-muted); }
+    .bar { height: 6px; background: var(--panel-raised); border-radius: 99px; overflow: hidden; margin-top: 8px; }
+    .bar > div { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width 0.3s; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+    @media (prefers-reduced-motion: reduce) { .step.active .dot::after { animation: none; } }
+
+    /* Result */
+    .result-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+    .result-title { font-weight: 650; font-size: 18px; word-break: break-word; }
+    .meta { font-size: 14px; color: var(--text-muted); }
+    .transcript {
+      background: var(--panel-raised);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px 22px;
+      max-height: 60vh;
+      overflow-y: auto;
+      font-size: 17px;
+      line-height: 1.75;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .transcript p + p { margin-top: 1em; }
+    .note { font-size: 13px; color: var(--text-muted); margin-top: 12px; }
+
+    .error-box {
+      background: var(--danger-soft);
+      border-radius: 12px;
+      padding: 16px 18px;
+      color: var(--text);
+    }
+    .error-box strong { display: block; margin-bottom: 4px; color: var(--danger); }
+
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <img src="/Logo.png" alt="JGM" class="logo">
+      <h1>Talk Transcription</h1>
+      <p class="lead">Upload a recorded talk and get the full text.</p>
+    </header>
+
+    <!-- 1. Choose a file and settings -->
+    <section class="card" id="setupView">
+      <div class="field">
+        <label for="keyInput">Soniox API key</label>
+        <div class="key-row">
+          <input type="password" id="keyInput" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+          <button type="button" class="secondary" id="keyToggle">Show</button>
+        </div>
+        <p class="hint">Saved in this browser only, and shared with the live admin page.</p>
+      </div>
+
+      <div class="field">
+        <span class="label">Recording</span>
+        <label class="drop" id="drop">
+          <input type="file" id="fileInput" accept="audio/*,video/mp4,.mp3,.m4a,.wav,.aac,.ogg,.flac,.webm,.amr,.aiff,.mp4">
+          <span class="drop-title" id="dropTitle">Choose an audio file</span>
+          <span class="drop-sub" id="dropSub">or drag it here · MP3, M4A, WAV and more</span>
+        </label>
+      </div>
+
+      <div class="field row">
+        <div>
+          <label for="spokenSelect">Spoken in</label>
+          <select id="spokenSelect">
+            <option value="ml,en" selected>Malayalam and English</option>
+            <option value="en">English</option>
+            <option value="kn">Kannada</option>
+            <option value="ta">Tamil</option>
+            <option value="hi">Hindi</option>
+            <option value="te">Telugu</option>
+            <option value="auto">Other (detect automatically)</option>
+          </select>
+        </div>
+        <div>
+          <label for="outputSelect">Text in</label>
+          <select id="outputSelect">
+            <option value="en" selected>English</option>
+            <option value="kn">Kannada</option>
+            <option value="ml">Malayalam</option>
+            <option value="ta">Tamil</option>
+            <option value="hi">Hindi</option>
+            <option value="te">Telugu</option>
+            <option value="none">As spoken (no translation)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="primary" id="startBtn" disabled>Transcribe</button>
+      </div>
+    </section>
+
+    <!-- 2. Working -->
+    <section class="card" id="workView" hidden>
+      <ol class="steps">
+        <li class="step" id="stepUpload">
+          <span class="dot"></span>
+          <div>
+            <div class="step-title">Uploading</div>
+            <div class="step-detail" id="uploadDetail">Starting…</div>
+            <div class="bar"><div id="uploadBar"></div></div>
+          </div>
+        </li>
+        <li class="step" id="stepProcess">
+          <span class="dot"></span>
+          <div>
+            <div class="step-title">Transcribing</div>
+            <div class="step-detail" id="processDetail">Usually a minute or two for an hour-long talk.</div>
+          </div>
+        </li>
+        <li class="step" id="stepDone">
+          <span class="dot"></span>
+          <div><div class="step-title">Ready to copy</div></div>
+        </li>
+      </ol>
+      <div class="actions">
+        <button type="button" class="quiet" id="cancelBtn">Cancel</button>
+      </div>
+    </section>
+
+    <!-- 3. Result -->
+    <section class="card" id="doneView" hidden>
+      <div class="result-head">
+        <div class="result-title" id="resultTitle"></div>
+        <div class="meta" id="resultMeta"></div>
+      </div>
+      <div class="transcript" id="transcript" tabindex="0"></div>
+      <div class="actions">
+        <button type="button" class="primary" id="copyBtn">Copy text</button>
+        <button type="button" class="secondary" id="againBtn">Transcribe another</button>
+      </div>
+      <p class="note">The recording has been removed from Soniox. This text stays here until you transcribe another.</p>
+    </section>
+
+    <!-- Error -->
+    <section class="card" id="errorView" hidden>
+      <div class="error-box">
+        <strong id="errorTitle">Something went wrong</strong>
+        <span id="errorText"></span>
+      </div>
+      <div class="actions">
+        <button type="button" class="primary" id="retryBtn">Try again</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- portal-config -->
+  <script>
+    const CONFIG = window.PORTAL_CONFIG || { model: 'stt-async-v6', context: null };
+    const API = 'https://api.soniox.com';
+    const AUTO_HINTS = ['ml', 'en', 'hi', 'ta', 'kn', 'te'];
+    const MAX_HOURS = 5;
+    const POLL_MS = 4000;
+    const LANG_NAMES = { en: 'English', kn: 'Kannada', ml: 'Malayalam', ta: 'Tamil', hi: 'Hindi', te: 'Telugu', none: 'As spoken' };
+
+    const $ = (id) => document.getElementById(id);
+    const views = ['setupView', 'workView', 'doneView', 'errorView'];
+    function show(view) { views.forEach(v => { $(v).hidden = v !== view; }); }
+
+    // localStorage can be unavailable (private mode); everything still works without it
+    const store = {
+      get(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } },
+      set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
+      remove(key) { try { localStorage.removeItem(key); } catch {} },
+      getText(key) { try { return localStorage.getItem(key) || ''; } catch { return ''; } },
+      setText(key, value) { try { localStorage.setItem(key, value); } catch {} }
+    };
+
+    // ===== Key (same storage as the admin page) =====
+    const keyInput = $('keyInput');
+    keyInput.value = store.getText('sonioxApiKey');
+    keyInput.addEventListener('input', () => { store.setText('sonioxApiKey', keyInput.value.trim()); updateStart(); });
+    $('keyToggle').addEventListener('click', () => {
+      const hidden = keyInput.type === 'password';
+      keyInput.type = hidden ? 'text' : 'password';
+      $('keyToggle').textContent = hidden ? 'Hide' : 'Show';
+    });
+    const apiKey = () => keyInput.value.trim();
+
+    // ===== Settings, remembered between talks =====
+    const saved = store.get('portalSettings') || {};
+    if (saved.spoken) $('spokenSelect').value = saved.spoken;
+    if (saved.output) $('outputSelect').value = saved.output;
+    ['spokenSelect', 'outputSelect'].forEach(id => $(id).addEventListener('change', () => {
+      store.set('portalSettings', { spoken: $('spokenSelect').value, output: $('outputSelect').value });
+    }));
+
+    // ===== File =====
+    let file = null;
+    let fileSeconds = null;
+    const drop = $('drop');
+
+    function formatDuration(seconds) {
+      const m = Math.round(seconds / 60);
+      if (m < 60) return `${Math.max(1, m)} min`;
+      return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+    }
+
+    function pickFile(f) {
+      file = f || null;
+      fileSeconds = null;
+      drop.classList.toggle('has-file', !!file);
+      if (!file) {
+        $('dropTitle').textContent = 'Choose an audio file';
+        $('dropSub').textContent = 'or drag it here · MP3, M4A, WAV and more';
+        return updateStart();
+      }
+      $('dropTitle').textContent = file.name;
+      const size = `${(file.size / 1048576).toFixed(file.size < 10485760 ? 1 : 0)} MB`;
+      $('dropSub').textContent = `${size} · click to choose a different file`;
+      // Read the length, so a file that's too long is caught before uploading
+      const audio = new Audio();
+      const url = URL.createObjectURL(file);
+      audio.preload = 'metadata';
+      audio.onloadedmetadata = () => {
+        if (file !== f) return;
+        if (isFinite(audio.duration)) {
+          fileSeconds = audio.duration;
+          $('dropSub').textContent = `${formatDuration(fileSeconds)} · ${size} · click to choose a different file`;
+        }
+        URL.revokeObjectURL(url);
+        updateStart();
+      };
+      audio.onerror = () => URL.revokeObjectURL(url);
+      audio.src = url;
+      updateStart();
+    }
+
+    $('fileInput').addEventListener('change', (e) => pickFile(e.target.files[0]));
+    ['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('dragging'); }));
+    ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, () => drop.classList.remove('dragging')));
+    drop.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]); });
+
+    function updateStart() {
+      const tooLong = fileSeconds !== null && fileSeconds > MAX_HOURS * 3600;
+      if (tooLong) $('dropSub').textContent = `This recording is ${formatDuration(fileSeconds)}. Soniox takes up to ${MAX_HOURS} hours per file.`;
+      $('startBtn').disabled = !file || !apiKey() || tooLong;
+    }
+    updateStart();
+
+    // ===== Soniox =====
+    class SonioxError extends Error {
+      constructor(status, body) {
+        super((body && body.error_message) || `Request failed (${status})`);
+        this.status = status;
+        this.type = body && body.error_type;
+      }
+    }
+
+    async function soniox(method, path, body) {
+      let res;
+      try {
+        res = await fetch(API + path, {
+          method,
+          headers: { Authorization: `Bearer ${apiKey()}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+          body: body ? JSON.stringify(body) : undefined
+        });
+      } catch {
+        throw new SonioxError(0, null);
+      }
+      if (res.status === 204) return null;
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new SonioxError(res.status, data);
+      return data;
+    }
+
+    let currentUpload = null;
+    function uploadFile(f) {
+      // XMLHttpRequest, because fetch can't report upload progress
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        currentUpload = xhr;
+        xhr.open('POST', `${API}/v1/files`);
+        xhr.setRequestHeader('Authorization', `Bearer ${apiKey()}`);
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          const pct = Math.round((e.loaded / e.total) * 100);
+          $('uploadBar').style.width = `${pct}%`;
+          $('uploadDetail').textContent = `${pct}% of ${(e.total / 1048576).toFixed(0)} MB`;
+        };
+        xhr.onload = () => {
+          currentUpload = null;
+          let data = null;
+          try { data = JSON.parse(xhr.responseText); } catch {}
+          if (xhr.status >= 200 && xhr.status < 300 && data && data.id) resolve(data);
+          else reject(new SonioxError(xhr.status, data));
+        };
+        xhr.onerror = () => { currentUpload = null; reject(new SonioxError(0, null)); };
+        xhr.onabort = () => { currentUpload = null; reject(new Error('cancelled')); };
+        const form = new FormData();
+        form.append('file', f, f.name);
+        xhr.send(form);
+      });
+    }
+
+    function buildRequest(fileId, spoken, output) {
+      const hints = spoken === 'auto' ? AUTO_HINTS : spoken.split(',');
+      const translate = output !== 'none' && !(hints.length === 1 && hints[0] === output);
+      const request = {
+        model: CONFIG.model,
+        file_id: fileId,
+        language_hints: hints,
+        enable_language_identification: true,
+        client_reference_id: 'portal'
+      };
+      if (translate) request.translation = { type: 'one_way', target_language: output };
+      if (CONFIG.context) request.context = CONFIG.context;
+      return { request, translate };
+    }
+
+    // Plain text in paragraphs of about 60 words
+    function buildText(tokens, translate) {
+      // With translation: the translated words plus speech already in the target language
+      // (marked "none"). Without: everything that was spoken.
+      const keep = translate
+        ? (t) => t.translation_status === 'translation' || !t.translation_status || t.translation_status === 'none'
+        : (t) => t.translation_status !== 'translation';
+      const text = tokens.filter(keep).map(t => t.text).join('').replace(/\s+/g, ' ').trim();
+      const sentences = text.match(/[^.!?।]+[.!?।]+["'”’)\]]*|[^.!?।]+$/g) || [];
+      const paragraphs = [];
+      let current = [];
+      let words = 0;
+      for (const s of sentences.map(s => s.trim()).filter(Boolean)) {
+        current.push(s);
+        words += s.split(/\s+/).length;
+        if (words >= 60) { paragraphs.push(current.join(' ')); current = []; words = 0; }
+      }
+      if (current.length) paragraphs.push(current.join(' '));
+      return paragraphs.join('\n\n');
+    }
+
+    async function cleanup(job) {
+      // Best effort: Soniox also deletes everything itself after 30 days
+      if (job.transcriptionId) await soniox('DELETE', `/v1/transcriptions/${job.transcriptionId}`).catch(() => {});
+      if (job.fileId) await soniox('DELETE', `/v1/files/${job.fileId}`).catch(() => {});
+    }
+
+    // ===== Flow =====
+    let pollTimer = null;
+    let elapsedTimer = null;
+    let cancelled = false;
+
+    function setStep(active) {
+      const order = ['stepUpload', 'stepProcess', 'stepDone'];
+      const idx = order.indexOf(active);
+      order.forEach((id, i) => {
+        $(id).classList.toggle('done', i < idx);
+        $(id).classList.toggle('active', i === idx);
+      });
+    }
+
+    $('startBtn').addEventListener('click', start);
+
+    async function start() {
+      cancelled = false;
+      const spoken = $('spokenSelect').value;
+      const output = $('outputSelect').value;
+      const job = { fileName: file.name, output, startedAt: Date.now() };
+      show('workView');
+      setStep('stepUpload');
+      $('uploadBar').style.width = '0%';
+      $('uploadDetail').textContent = 'Starting…';
+      try {
+        const uploaded = await uploadFile(file);
+        job.fileId = uploaded.id;
+        if (cancelled) return cleanup(job);
+        $('uploadDetail').textContent = 'Uploaded';
+        const { request, translate } = buildRequest(job.fileId, spoken, output);
+        job.translate = translate;
+        const created = await soniox('POST', '/v1/transcriptions', request);
+        job.transcriptionId = created.id;
+        store.set('portalJob', job); // lets a reload pick up where it left off
+        if (cancelled) return cancelJob(job);
+        waitForTranscript(job);
+      } catch (error) {
+        if (error.message === 'cancelled') return;
+        await cleanup(job);
+        fail(error);
+      }
+    }
+
+    function waitForTranscript(job) {
+      show('workView');
+      setStep('stepProcess');
+      const tick = () => {
+        const s = Math.round((Date.now() - job.startedAt) / 1000);
+        $('processDetail').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} so far · usually a minute or two for an hour-long talk`;
+      };
+      tick();
+      clearInterval(elapsedTimer);
+      elapsedTimer = setInterval(tick, 1000);
+      poll(job);
+    }
+
+    async function poll(job) {
+      clearTimeout(pollTimer);
+      if (cancelled) return;
+      try {
+        const status = await soniox('GET', `/v1/transcriptions/${job.transcriptionId}`);
+        if (cancelled) return;
+        if (status.status === 'error') {
+          throw new SonioxError(400, { error_message: status.error_message, error_type: status.error_type });
+        }
+        if (status.status !== 'completed') {
+          pollTimer = setTimeout(() => poll(job), POLL_MS);
+          return;
+        }
+        const transcript = await soniox('GET', `/v1/transcriptions/${job.transcriptionId}/transcript`);
+        const text = buildText(transcript.tokens || [], job.translate);
+        const result = { fileName: job.fileName, output: job.output, text };
+        store.set('portalResult', result);
+        store.remove('portalJob');
+        clearInterval(elapsedTimer);
+        await cleanup(job);
+        showResult(result);
+      } catch (error) {
+        if (error.status === 0) {
+          // Network blip: keep waiting
+          pollTimer = setTimeout(() => poll(job), POLL_MS * 2);
+          return;
+        }
+        clearInterval(elapsedTimer);
+        store.remove('portalJob');
+        await cleanup(job);
+        fail(error);
+      }
+    }
+
+    async function cancelJob(job) {
+      clearTimeout(pollTimer);
+      clearInterval(elapsedTimer);
+      store.remove('portalJob');
+      await cleanup(job);
+      show('setupView');
+    }
+
+    $('cancelBtn').addEventListener('click', () => {
+      cancelled = true;
+      if (currentUpload) currentUpload.abort();
+      const job = store.get('portalJob');
+      if (job) cancelJob(job);
+      else show('setupView');
+    });
+
+    function showResult(result) {
+      $('resultTitle').textContent = result.fileName;
+      const words = result.text ? result.text.split(/\s+/).length : 0;
+      $('resultMeta').textContent = `${words.toLocaleString()} words · ${LANG_NAMES[result.output] || result.output}`;
+      const box = $('transcript');
+      box.textContent = '';
+      if (!result.text) {
+        box.textContent = 'No speech was found in this recording.';
+      } else {
+        result.text.split('\n\n').forEach(p => {
+          const el = document.createElement('p');
+          el.textContent = p;
+          box.appendChild(el);
+        });
+      }
+      $('copyBtn').textContent = 'Copy text';
+      show('doneView');
+      setStep('stepDone');
+    }
+
+    $('copyBtn').addEventListener('click', async () => {
+      const result = store.get('portalResult');
+      const text = result ? result.text : $('transcript').innerText;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents($('transcript'));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('copy');
+      }
+      $('copyBtn').textContent = 'Copied ✓';
+      setTimeout(() => { $('copyBtn').textContent = 'Copy text'; }, 2500);
+    });
+
+    $('againBtn').addEventListener('click', () => {
+      store.remove('portalResult');
+      pickFile(null);
+      $('fileInput').value = '';
+      show('setupView');
+    });
+
+    function fail(error) {
+      const messages = {
+        401: ['The key wasn’t accepted', 'Check the Soniox API key and try again.'],
+        402: ['The Soniox account is out of credit', 'Add credit in the Soniox Console, then try again.'],
+        403: ['This key can’t do that', 'The key doesn’t have permission for file transcription.'],
+        413: ['The recording is too long', `Soniox takes up to ${MAX_HOURS} hours per file.`],
+        429: ['Soniox is busy', 'Too many requests right now. Wait a minute and try again.'],
+        0: ['Couldn’t reach Soniox', 'Check the internet connection and try again.']
+      };
+      let [title, text] = messages[error.status] || ['Something went wrong', error.message];
+      if (error.type === 'invalid_audio_file') [title, text] = ['Soniox couldn’t read this file', 'Try an MP3, M4A or WAV file.'];
+      $('errorTitle').textContent = title;
+      $('errorText').textContent = text;
+      show('errorView');
+    }
+
+    $('retryBtn').addEventListener('click', () => { show('setupView'); updateStart(); });
+
+    // ===== On load: resume a job, or show the last result =====
+    const pendingJob = store.get('portalJob');
+    const lastResult = store.get('portalResult');
+    if (pendingJob && pendingJob.transcriptionId && apiKey()) waitForTranscript(pendingJob);
+    else if (lastResult) showResult(lastResult);
+    else show('setupView');
+  </script>
+</body>
+</html>

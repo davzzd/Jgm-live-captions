@@ -20,6 +20,7 @@ COPY follow-scroll.js ./
 COPY captions.html ./
 COPY client.html ./
 COPY audience.html ./
+COPY portal.html ./
 COPY Logo.png ./
 
 # Create .env file placeholder (user should mount their own)

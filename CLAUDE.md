@@ -16,6 +16,9 @@ and don't over-engineer.
 - `/` and `/audience`: the phone page (`audience.html`). Both must keep working.
 - `/client`: the admin page. It has no password, so never press anything on the live one.
 - `/transcript`: the transcript and caption review page, built inside `ws-server.js`.
+- `/portal`: transcribes a recorded talk (`portal.html`). The browser uploads straight to
+  Soniox's file API with the key typed into the page (shared with `/client`); the server only
+  fills in the model and the church context. Two people use it, one talk at a time.
 
 ## Deploys
 - Merging to `main` deploys straight away and restarts the server (GitHub Actions to Linode,

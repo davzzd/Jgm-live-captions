@@ -24,6 +24,7 @@ const { Corrections } = require('./corrections');
 const FOLLOW_SCROLL_JS = fs.readFileSync(path.join(__dirname, 'follow-scroll.js'), 'utf8');
 const AUDIENCE_PAGE = fs.readFileSync(path.join(__dirname, 'audience.html'), 'utf8')
   .replace('<!-- follow-scroll -->', () => `<script>${FOLLOW_SCROLL_JS}</script>`);
+const PORTAL_PAGE = fs.readFileSync(path.join(__dirname, 'portal.html'), 'utf8');
 
 // Load .env file from the same directory as this script
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -206,6 +207,7 @@ const SONIOX_WS_URL = process.env.SONIOX_WS_URL || 'wss://stt-rt.soniox.com/tran
 // Fixed in code on purpose: a SONIOX_MODEL line in a server's .env once kept production on an
 // older model for months without anyone noticing. Change it here and deploy.
 const SONIOX_MODEL = 'stt-rt-v6';
+const SONIOX_ASYNC_MODEL = 'stt-async-v6'; // recorded files, on /portal
 const DEFAULT_SONIOX_API_KEY = process.env.SONIOX_MASTER_API_KEY || '';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
@@ -687,6 +689,14 @@ function broadcastServiceStatus(status, message) {
 // Home page - serve audience page
 app.get('/', (req, res) => {
   res.type('html').send(AUDIENCE_PAGE);
+});
+
+// Transcribe a recorded talk. The browser talks to Soniox directly with the key typed into
+// the page; the server only fills in the model and the same church context as live captions.
+app.get('/portal', (req, res) => {
+  const config = JSON.stringify({ model: SONIOX_ASYNC_MODEL, context: buildSonioxContext() })
+    .replace(/</g, '\\u003c');
+  res.type('html').send(PORTAL_PAGE.replace('<!-- portal-config -->', () => `<script>window.PORTAL_CONFIG = ${config};</script>`));
 });
 
 // Client/admin page
