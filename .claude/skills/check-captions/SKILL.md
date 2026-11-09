@@ -20,6 +20,18 @@ description: Run the captions app locally and check a change works on the real p
 3. Only add a check to `smoke.js` when it guards something that broke before or would be
    easy to break again. Keep it quick.
 
+# Testing against real Soniox
+
+- The user's current key is the commented `SONIOX_MASTER_API_KEY=` line in `.env` (not the
+  `(old)` one, which is out of credits). Read it from there, and never print it.
+- On the user's PC, Kaspersky inspects HTTPS, so Node refuses Soniox's certificate
+  (`SELF_SIGNED_CERT_IN_CHAIN`). Run Node with `--use-system-ca`. Never turn certificate
+  checking off.
+- A real 10-minute talk is at `M:\JGM\test-adio\sample-audio.m4a`. Its index is at the end, so
+  Soniox can't stream it as is: decode it to 16 kHz mono s16le first (headless Chrome's
+  `decodeAudioData` works; there's no ffmpeg), then send 3200-byte chunks every 100 ms.
+- Usage is about $0.12 per hour of audio. Say how much a test will use before running it.
+
 # After a deploy
 
 - The workflow waits for https://translate.joshuageneration.org to answer.
