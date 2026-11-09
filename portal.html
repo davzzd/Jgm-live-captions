@@ -167,6 +167,7 @@
     .step.done .dot::after { content: '✓'; }
     .step-title { font-weight: 600; line-height: 28px; }
     .step-detail { font-size: 14px; color: var(--text-muted); }
+    .step-note { font-size: 14px; color: var(--text-secondary); margin-top: 8px; }
     .bar { height: 6px; background: var(--panel-raised); border-radius: 99px; overflow: hidden; margin-top: 8px; }
     .bar > div { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width 0.3s; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -271,6 +272,7 @@
             <div class="step-title">Uploading</div>
             <div class="step-detail" id="uploadDetail">Starting…</div>
             <div class="bar"><div id="uploadBar"></div></div>
+            <div class="step-note" id="uploadNote" hidden>Keep this page open until the upload finishes.</div>
           </div>
         </li>
         <li class="step" id="stepProcess">
@@ -278,6 +280,7 @@
           <div>
             <div class="step-title">Transcribing</div>
             <div class="step-detail" id="processDetail">Usually a minute or two for an hour-long talk.</div>
+            <div class="step-note" id="processNote" hidden>You can close this page now. Open it again later in this browser to see the text.</div>
           </div>
         </li>
         <li class="step" id="stepDone">
@@ -436,6 +439,43 @@
       return data;
     }
 
+    // While uploading, closing or reloading the page would lose the upload: ask first
+    window.addEventListener('beforeunload', (e) => {
+      if (!currentUpload) return;
+      e.preventDefault();
+      e.returnValue = '';
+    });
+
+    // Keep a phone's screen from turning off while uploading. Optional: where it isn't
+    // supported or is refused (battery saver, for example), nothing happens and nothing shows.
+    let wakeLock = null;
+    let wantAwake = false;
+    let requesting = false;
+    async function keepAwake(on) {
+      wantAwake = on;
+      try {
+        if (!on) {
+          const lock = wakeLock;
+          wakeLock = null;
+          if (lock) await lock.release();
+          return;
+        }
+        if (wakeLock || requesting || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+        requesting = true;
+        const lock = await navigator.wakeLock.request('screen').finally(() => { requesting = false; });
+        if (!wantAwake) { lock.release().catch(() => {}); return; } // the upload finished meanwhile
+        wakeLock = lock;
+        lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
+      } catch {
+        requesting = false;
+        // Not available or not allowed: the upload carries on regardless
+      }
+    }
+    // The browser drops the lock when the page is hidden; take it again on return
+    document.addEventListener('visibilitychange', () => {
+      if (wantAwake && document.visibilityState === 'visible') keepAwake(true);
+    });
+
     let currentUpload = null;
     function uploadFile(f) {
       // XMLHttpRequest, because fetch can't report upload progress
@@ -450,18 +490,20 @@
           $('uploadBar').style.width = `${pct}%`;
           $('uploadDetail').textContent = `${pct}% of ${(e.total / 1048576).toFixed(0)} MB`;
         };
+        const done = () => { currentUpload = null; keepAwake(false); };
         xhr.onload = () => {
-          currentUpload = null;
+          done();
           let data = null;
           try { data = JSON.parse(xhr.responseText); } catch {}
           if (xhr.status >= 200 && xhr.status < 300 && data && data.id) resolve(data);
           else reject(new SonioxError(xhr.status, data));
         };
-        xhr.onerror = () => { currentUpload = null; reject(new SonioxError(0, null)); };
-        xhr.onabort = () => { currentUpload = null; reject(new Error('cancelled')); };
+        xhr.onerror = () => { done(); reject(new SonioxError(0, null)); };
+        xhr.onabort = () => { done(); reject(new Error('cancelled')); };
         const form = new FormData();
         form.append('file', f, f.name);
         xhr.send(form);
+        keepAwake(true);
       });
     }
 
@@ -519,6 +561,8 @@
         $(id).classList.toggle('done', i < idx);
         $(id).classList.toggle('active', i === idx);
       });
+      $('uploadNote').hidden = active !== 'stepUpload';
+      $('processNote').hidden = active !== 'stepProcess';
     }
 
     $('startBtn').addEventListener('click', start);
