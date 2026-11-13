@@ -3058,17 +3058,18 @@ app.get('/audience/stream', (req, res) => {
     }
   }
 
-  // Send initial heartbeat
-  res.write(': heartbeat\n\n');
-
-  // Keep connection alive with periodic heartbeats
+  // Keep-alive ping. It must be a data message, not an SSE comment (": ..."): browsers drop
+  // comments, so the phone page would hear nothing during quiet stretches and reconnect
+  // every 30s. 15s keeps it well inside the page's 30s "connection is stale" limit.
+  const ping = `data: ${JSON.stringify({ type: 'ping' })}\n\n`;
+  res.write(ping);
   const heartbeat = setInterval(() => {
     try {
-      res.write(': heartbeat\n\n');
+      res.write(ping);
     } catch (error) {
       clearInterval(heartbeat);
     }
-  }, 30000);
+  }, 15000);
 
   // Clean up on close
   req.on('close', () => {

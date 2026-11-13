@@ -1141,7 +1141,10 @@
         
         try {
           const data = JSON.parse(event.data);
-          
+
+          // Keep-alive from the server: only refreshes lastMessageTime (above)
+          if (data.type === 'ping') return;
+
           // Handle different message types
           if (data.type === 'status') {
             // Service status update
